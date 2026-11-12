@@ -89,7 +89,8 @@
  *   - Real-time session activity: the session's control-stream envelopes are
  *     tapped and derive per-session {streaming, blocked} from state /
  *     the agent_start event (the session sends no state frame at turn start) /
- *     ui_request / ui_request_end (a state frame's pendingUiRequestIds, when
+ *     ui_request / ui_request_end, except browser_ui display contributions,
+ *     which never block (a state frame's pendingUiRequestIds, when
  *     present, replaces the delta-built open-dialog set, so every pair-up
  *     resyncs `blocked`), broadcasting an edge-generated
  *     {type:"session_activity"} frame ONLY on change (never ringed,
@@ -148,6 +149,7 @@ import {
 	type BrowserCloseKind,
 } from "#lib/wire/browser-socket";
 import { ReplayRing } from "#lib/wire/replay-ring";
+import { BROWSER_UI_METHOD } from "#lib/wire/browser-ui-contract";
 import {
 	CALLBACK_BROWSER_STREAM_PREFIX,
 	CALLBACK_CONTROL_STREAM_ID,
@@ -209,7 +211,8 @@ class NotAsleepError extends Error {}
 
 /**
  * Per-session realtime activity, derived by the edge from the raw tapped
- * session frames (state → isStreaming, an agent_start event → streaming; ui_request / ui_request_end, and a
+ * session frames (state → isStreaming, an agent_start event → streaming; ui_request / ui_request_end
+ * other than browser_ui display contributions, and a
  * state frame's pendingUiRequestIds snapshot → the open-dialog set that
  * drives `blocked`; a yielded agent_end event → `pendingTurn`, the outcome
  * the next streaming true→false broadcast reports as `endedTurn`), and reset
@@ -225,6 +228,12 @@ interface SessionActivity {
 	blocked: boolean;
 	/** ui_request ids currently open on the session; `blocked` = size > 0. */
 	openDialogIds: Set<string>;
+	/**
+	 * Open browser_ui ids: an extension's status, working message or widget, which never
+	 * blocks. Kept so a state snapshot from a session that still lists them in
+	 * pendingUiRequestIds does not count them either.
+	 */
+	displayRequestIds: Set<string>;
 	/**
 	 * Outcome of the last observed turn end (a yielded agent_end), stashed
 	 * until the state frame that flips `streaming` true→false consumes it as
@@ -2517,9 +2526,11 @@ export class FleetEdge {
 							streaming: frame.state?.isStreaming === true,
 						};
 						if (Array.isArray(pending)) {
-							const openDialogIds = this.#ensureActivity(entry.workspaceId).openDialogIds;
+							const { openDialogIds, displayRequestIds } = this.#ensureActivity(entry.workspaceId);
 							openDialogIds.clear();
-							for (const id of pending) if (typeof id === "string") openDialogIds.add(id);
+							for (const id of pending) {
+								if (typeof id === "string" && !displayRequestIds.has(id)) openDialogIds.add(id);
+							}
 							patch.blocked = openDialogIds.size > 0;
 						}
 						this.#setActivity(entry.workspaceId, patch);
@@ -2581,13 +2592,19 @@ export class FleetEdge {
 						break;
 					case "ui_request": {
 						const activity = this.#ensureActivity(entry.workspaceId);
+						if (frame.method === BROWSER_UI_METHOD) {
+							activity.displayRequestIds.add(frame.id);
+							break;
+						}
 						if (activity.openDialogIds.has(frame.id)) break; // replay of the same open
 						activity.openDialogIds.add(frame.id);
 						this.#setActivity(entry.workspaceId, { blocked: true });
 						break;
 					}
 					case "ui_request_end": {
+						// An end only unblocks a dialog this set counted.
 						const activity = this.#sessionActivity.get(entry.workspaceId);
+						activity?.displayRequestIds.delete(frame.id);
 						if (activity && activity.openDialogIds.delete(frame.id)) {
 							this.#setActivity(entry.workspaceId, { blocked: activity.openDialogIds.size > 0 });
 						}
@@ -2619,7 +2636,13 @@ export class FleetEdge {
 	#ensureActivity(workspaceId: string): SessionActivity {
 		let activity = this.#sessionActivity.get(workspaceId);
 		if (!activity) {
-			activity = { known: false, streaming: false, blocked: false, openDialogIds: new Set() };
+			activity = {
+				known: false,
+				streaming: false,
+				blocked: false,
+				openDialogIds: new Set(),
+				displayRequestIds: new Set(),
+			};
 			this.#sessionActivity.set(workspaceId, activity);
 		}
 		return activity;
@@ -2670,6 +2693,7 @@ export class FleetEdge {
 		const activity = this.#sessionActivity.get(entry.workspaceId);
 		if (!activity?.known) return;
 		activity.openDialogIds.clear();
+		activity.displayRequestIds.clear();
 		activity.pendingTurn = undefined;
 		this.#setActivity(entry.workspaceId, { streaming: false, blocked: false });
 	}

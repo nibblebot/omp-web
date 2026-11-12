@@ -106,10 +106,11 @@ export interface WebSessionState {
 	taskModel?: string;
 	isStreaming: boolean;
 	/**
-	 * Ids of the ui_requests pending on the session (the `id` carried by the
-	 * `ui_request`/`ui_request_end` frames). Lets the fleet edge rebuild a
-	 * session's blocked state from any state frame, notably the one published at
-	 * every pair-up, which the delta-only control mirror cannot replay.
+	 * Ids of the ui_requests pending on the session that wait on the user (the
+	 * `id` carried by the `ui_request`/`ui_request_end` frames; `browser_ui`
+	 * display contributions are left out, as they never block). Lets the fleet
+	 * edge rebuild a session's blocked state from any state frame, notably the one
+	 * published at every pair-up, which the delta-only control mirror cannot replay.
 	 */
 	pendingUiRequestIds?: string[];
 	isCompacting: boolean;

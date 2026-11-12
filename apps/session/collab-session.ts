@@ -1,11 +1,21 @@
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { createAgentSession, type ModelRegistry, type Settings } from "@oh-my-pi/pi-coding-agent";
+import {
+	createAgentSession,
+	type ExtensionUIContext,
+	type ModelRegistry,
+	type Settings,
+} from "@oh-my-pi/pi-coding-agent";
 import { join } from "node:path";
 import {
 	COLLAB_PROMPT_MESSAGE_TYPE,
 	type CollabPromptDetails,
 } from "@oh-my-pi/pi-coding-agent/collab/protocol";
+import {
+	runExtensionCompact,
+	runExtensionSetModel,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions/compact-handler";
+import { getSessionSlashCommands } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/get-commands-handler";
 import { parseSkillInvocation } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { copyForReplication } from "@oh-my-pi/pi-coding-agent/collab/replication-shrink";
 import { reconnectMcpManagerServer } from "@oh-my-pi/pi-coding-agent/mcp/oauth-reauth";
@@ -391,8 +401,10 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 			onSubagentsChange: null,
 		};
 		entry.slashRuntime = buildSlashRuntime(entry);
+		// One browser UI context for the tools and the extension runner.
+		const uiContext = buildUiContext(entry);
 		// Feeds the tool UI context; without hasUI the ask tool never registers.
-		result.setToolUIContext(buildUiContext(entry), true);
+		result.setToolUIContext(uiContext, true);
 		// LSP follows the CLI default (main.ts: sessionOptions.enableLsp ?? true); omp-session sessions set no override.
 		ensureWorkerReviver(entry, {
 			authStorage: deps.authStorage,
@@ -409,10 +421,90 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 				broadcastTo(target.handle, { type: "skills_changed", state }),
 		});
 		installPlanReviewHandler(entry);
+		await initializeExtensionRunner(entry, uiContext);
 		// Boot has no client yet and a broadcast is never replayed to a fresh stream, so hold
 		// the SDK's model diagnostic until the first priming (takeStartupNoticeFrames).
 		startupNotice = result.modelFallbackMessage ?? null;
 		return entry;
+	}
+
+	/**
+	 * Wires the session's extension runner as the SDK's own hosts do right after createAgentSession
+	 * (modes/runtime-init.ts for print and RPC, modes/acp/acp-agent.ts #configureExtensions):
+	 * runtime actions, the browser UI context the tools get, then `session_start`. Before
+	 * `initialize` the runner holds the SDK's no-op UI context, so `hasUI()` is false and every
+	 * reader takes its no-prompt path: a saved-reset auto-redeem whose window is unset only posts a
+	 * notice (session/agent-session.ts #confirmAutoRedeem; `interactivePrompts` is left at its
+	 * default, true), an extension's `ctx.ui` dialogs resolve as dismissed, and a tool call that
+	 * needs approval fails closed (extensibility/extensions/wrapper.ts). After it those prompts are
+	 * browser dialogs. With no browser or writable guest attached a dialog rejects at once (No
+	 * connected client), which the auto-redeem and approval paths read as "spend nothing" and "deny".
+	 *
+	 * Runs once: the AgentSession, and the runner it was built with, survives new, switch, branch and
+	 * resume. No command context actions: an extension command's newSession, switchSession, branch,
+	 * navigateTree and reload keep the runner's defaults, since a web session change has to go
+	 * through the session methods that resync clients and per-session state (methods.ts changeSession).
+	 */
+	async function initializeExtensionRunner(
+		entry: SessionEntry,
+		uiContext: ExtensionUIContext,
+	): Promise<void> {
+		const { session } = entry;
+		const runner = session.extensionRunner;
+		if (!runner) return;
+		const report = (message: string): void => {
+			console.error(`omp-session: ${message}`);
+			notifyEvent(entry, message, "error");
+		};
+		runner.initialize(
+			{
+				sendMessage: (message, options) => {
+					session.sendCustomMessage(message, options).catch((err: unknown) => {
+						report(`Extension message failed: ${String(err)}`);
+					});
+				},
+				sendUserMessage: (content, options) => session.sendUserMessage(content, options),
+				appendEntry: (customType, data) => {
+					session.sessionManager.appendCustomEntry(customType, data);
+				},
+				setLabel: (targetId, label) => {
+					session.sessionManager.appendLabelChange(targetId, label);
+				},
+				getActiveTools: () => session.getEnabledToolNames(),
+				getAllTools: () => session.getAllToolInfos(),
+				setActiveTools: (toolNames) => session.setActiveToolsByName(toolNames),
+				getCommands: () => getSessionSlashCommands(session),
+				setModel: (model) => runExtensionSetModel(session, model),
+				getThinkingLevel: () => session.thinkingLevel,
+				setThinkingLevel: (level) => session.setThinkingLevel(level),
+				getServiceTiers: () => session.serviceTierByFamily,
+				setServiceTier: (family, tier) => session.setServiceTierFamily(family, tier),
+				getSessionName: () => session.sessionManager.getSessionName(),
+				setSessionName: async (name) => {
+					await session.sessionManager.setSessionName(name, "user");
+				},
+			},
+			{
+				getModel: () => session.model,
+				isIdle: () => !session.isStreaming,
+				abort: () => {
+					void session.abort({ reason: USER_INTERRUPT_LABEL });
+				},
+				hasPendingMessages: () => session.queuedMessageCount > 0,
+				shutdown: () => {},
+				getContextUsage: () => session.getContextUsage(),
+				getSystemPrompt: () => session.systemPrompt,
+				runEphemeralTurn: (args) => session.runEphemeralTurn(args),
+				compact: (instructionsOrOptions) => runExtensionCompact(session, instructionsOrOptions),
+			},
+			undefined,
+			uiContext,
+			// The SDK's mode for a host whose UI is remote; the ACP host passes it too.
+			"rpc",
+		);
+		// Handler and custom command failures; without a listener the runner drops them.
+		runner.onError((error) => report(`Extension "${error.extensionPath}" error: ${error.error}`));
+		await runner.emit({ type: "session_start" });
 	}
 
 	/**

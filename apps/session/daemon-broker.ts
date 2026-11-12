@@ -30,6 +30,7 @@ import { planReviewWaiting } from "./review-plan";
 import type { SessionEntry } from "./session-entry";
 import { activeModelPreset } from "./model-role-pin";
 import { broadcast, broadcastTo } from "./client-delivery";
+import { openDialogIds } from "./ui-context";
 
 // ---------------------------------------------------------------------------
 // Session state snapshots + the omp hub daemon-broker polling/control client:
@@ -203,7 +204,8 @@ export function createDaemonBroker(deps: DaemonBrokerDeps): DaemonBroker {
 					: undefined,
 			taskModel: taskModel || undefined,
 			isStreaming: session.isStreaming,
-			pendingUiRequestIds: [...entry.pendingUiRequests.keys()],
+			// Dialogs only: an extension's status or widget never makes the session look blocked.
+			pendingUiRequestIds: openDialogIds(entry),
 			isCompacting: session.isCompacting,
 			sessionFile: session.sessionFile,
 			...(session.sessionManager.isSessionOnDisk() ? { sessionPersisted: true as const } : {}),

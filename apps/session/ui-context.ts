@@ -269,6 +269,23 @@ function endWebUiRequest(entry: SessionEntry, id: string, answeredBy?: string): 
 }
 
 /**
+ * Whether a pending request waits on the user. A browser_ui display contribution (an
+ * extension's status, working message or widget) is pending only so a click can answer it:
+ * it never makes the session look blocked (state `pendingUiRequestIds`), never holds it from
+ * idle exit, and is primed by browser-ui.ts, not here.
+ */
+export function isUserDialog(request: { method?: string }): boolean {
+	return request.method !== BROWSER_UI_METHOD;
+}
+
+/** Ids of the pending requests that wait on the user (see {@link isUserDialog}). */
+export function openDialogIds(entry: SessionEntry): string[] {
+	const ids: string[] = [];
+	for (const [id, p] of entry.pendingUiRequests) if (isUserDialog(p)) ids.push(id);
+	return ids;
+}
+
+/**
  * The open dialogs as `ui_request` frames, for priming a client that attaches
  * (or reloads) while one is pending: live broadcasts are never replayed to a
  * fresh stream, so without this a reload mid-ask leaves a turn blocked on a
@@ -277,7 +294,7 @@ function endWebUiRequest(entry: SessionEntry, id: string, answeredBy?: string): 
 export function pendingUiRequestFrames(entry: SessionEntry): ServerFrame[] {
 	const frames: ServerFrame[] = [];
 	for (const [id, p] of entry.pendingUiRequests) {
-		if (p.method === undefined || p.method === BROWSER_UI_METHOD) continue;
+		if (p.method === undefined || !isUserDialog(p)) continue;
 		frames.push({ type: "ui_request", id, method: p.method, params: p.params });
 	}
 	return frames;

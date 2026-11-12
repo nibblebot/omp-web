@@ -2,15 +2,15 @@
 //
 // Terminal TUI hooks (custom components, raw input, editor chrome, themes)
 // cannot run in the headless web host. This module is the single place that
-// decides what the browser CAN do instead:
+// decides what the browser does with them instead (see wrapTerminalHooks):
 //
 // - `BrowserUiCapability` names the eight capability slots; only the
 //   available ones accept contributions.
 // - Contributions are versioned, JSON-serializable, declarative payloads
 //   (allowlisted text/code/list/actions blocks). Anything executable
-//   (component factories, function values, html/raw/eval keys) is rejected
-//   with an isolation-contract-required error: extension payloads run in the
-//   browser with no isolation boundary, so code never crosses it.
+//   (component factories, function values, html/raw/eval keys) never crosses
+//   to the browser, which has no isolation boundary for it: the contract
+//   rejects such payloads, and the terminal hooks that take code are no-ops.
 // - Transport stays minimal: ONE ui_request method ("browser_ui") over the
 //   existing browser socket ui_request/ui_response/ui_request_end path.
 //   No new transport, no new bus (no OMP_PROTO bump; additive-only wire).
@@ -23,11 +23,12 @@
 // between this module and ui-context are only used when constructing/requesting UI.
 
 import type { ExtensionUIContext } from "@oh-my-pi/pi-coding-agent";
+import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionEntry } from "./session-entry";
-import { broadcastTo } from "./client-delivery";
+import { broadcastTo, streams, type ClientConsumer } from "./client-delivery";
+import type { ServerFrame } from "#lib/wire/protocol";
 import { hasBrowserUiClient, webUiRequest } from "./ui-context";
 import {
-	BROWSER_UI_DOC,
 	BROWSER_UI_METHOD,
 	BROWSER_UI_VERSION,
 	buildBrowserUiParams,
@@ -50,17 +51,26 @@ interface ActiveContribution {
 /** Live contributions per owning session entry. WeakMap: session close drops the scope. */
 const activeByEntry = new WeakMap<SessionEntry, Map<string, ActiveContribution>>();
 
+/** A contribution ended by its owner: superseded by a newer update or disposed. */
+class BrowserUiReplacedError extends Error {}
+
+function contributionKey(owner: string, id: string): string {
+	return JSON.stringify([owner, id]);
+}
+
 /**
- * Send one browser_ui request for a validated contribution. Update semantics:
- * sending the same (owner, id) supersedes the live one (its pending promise
- * rejects with a "superseded" error and its ui_request_end rings). Resolves
- * with the ui_response result; an undefined result is the client's cancel.
- * Rejects explicitly when no client is attached (never hangs, never a false
- * success).
+ * Make a validated contribution the live browser_ui request of its (owner, id). Update
+ * semantics: the live one it replaces rejects with a "superseded" error and its
+ * ui_request_end rings. `open` registers the pending request (calling `onRegistered` with its
+ * id; `webUiRequest` rejects at once when no client is attached). Resolves with the
+ * ui_response result; an undefined result is the client's cancel.
  */
-export function requestBrowserUi(entry: SessionEntry, contribution: unknown): Promise<unknown> {
-	const valid = buildBrowserUiParams(contribution);
-	const key = JSON.stringify([valid.owner, valid.id]);
+function showContribution(
+	entry: SessionEntry,
+	valid: BrowserUiContribution,
+	open: (onRegistered: (id: string) => void) => Promise<unknown>,
+): Promise<unknown> {
+	const key = contributionKey(valid.owner, valid.id);
 	let actives = activeByEntry.get(entry);
 	if (!actives) {
 		actives = new Map();
@@ -73,7 +83,7 @@ export function requestBrowserUi(entry: SessionEntry, contribution: unknown): Pr
 		if (pending) {
 			entry.pendingUiRequests.delete(prior.requestId);
 			pending.reject(
-				new Error(
+				new BrowserUiReplacedError(
 					`browser_ui contribution "${valid.id}" (owner "${valid.owner}") superseded by a newer update.`,
 				),
 			);
@@ -83,7 +93,7 @@ export function requestBrowserUi(entry: SessionEntry, contribution: unknown): Pr
 	let requestId: string | undefined;
 	const sessionId = entry.session?.sessionId;
 	const handle = entry.handle;
-	const promise = webUiRequest(entry, BROWSER_UI_METHOD, valid, (id) => {
+	const promise = open((id) => {
 		requestId = id;
 		actives.set(key, { requestId: id, contribution: valid });
 	}).then((result) => {
@@ -117,9 +127,9 @@ export function requestBrowserUi(entry: SessionEntry, contribution: unknown): Pr
 }
 
 /**
- * Owner-scoped dispose: reject the live (owner, id) request and ring its
- * ui_request_end so every attached tab dismisses it. Best-effort no-op when
- * nothing is live (e.g. already answered or disposed).
+ * Owner-scoped dispose: forget the (owner, id) contribution, so no client is primed with it,
+ * then reject its live request and ring its ui_request_end so every attached tab dismisses it.
+ * Best-effort no-op when nothing is kept or live.
  */
 export function disposeBrowserUi(
 	entry: SessionEntry,
@@ -127,56 +137,129 @@ export function disposeBrowserUi(
 	id: string,
 	reason = "browser_ui contribution disposed",
 ): void {
+	const key = contributionKey(owner, id);
+	retainedByEntry.get(entry)?.delete(key);
 	const actives = activeByEntry.get(entry);
-	const record = actives?.get(JSON.stringify([owner, id]));
+	const record = actives?.get(key);
 	if (!record || !actives) return;
-	actives.delete(JSON.stringify([owner, id]));
+	actives.delete(key);
 	const pending = entry.pendingUiRequests.get(record.requestId);
 	if (!pending) return;
 	entry.pendingUiRequests.delete(record.requestId);
-	pending.reject(new Error(reason));
+	pending.reject(new BrowserUiReplacedError(reason));
 	broadcastTo(entry.handle, { type: "ui_request_end", id: record.requestId });
 }
 
 // ---------------------------------------------------------------------------
-// Migration adapter: terminal hooks -> browser contributions.
+// Kept display contributions, primed to every client that attaches.
+// ---------------------------------------------------------------------------
+
+/** The most display contributions a session keeps; the browser shows at most 32 contributions. */
+export const MAX_RETAINED_BROWSER_UI = 32;
+
+/**
+ * The current display contribution per (owner, id) of each session entry, kept whether or not a
+ * client is attached: an extension sets its status once at `session_start`, before the first
+ * browser attaches. Each is validated (at most 64 KiB), so a session keeps at most 2 MiB.
+ * Scoped to the entry, which lives through new, switch and branch like the extension runner
+ * that sets them: as in the terminal, an extension's status stays until the extension changes
+ * or clears it. A client's dismiss ends only the live copy; the next client primed sees it.
+ */
+const retainedByEntry = new WeakMap<SessionEntry, Map<string, BrowserUiContribution>>();
+
+let nextPrimedRequestId = 1;
+
+/** Keep `valid` as the current contribution of its (owner, id); the least recently set goes past the cap. */
+function retain(entry: SessionEntry, valid: BrowserUiContribution): void {
+	let retained = retainedByEntry.get(entry);
+	if (!retained) {
+		retained = new Map();
+		retainedByEntry.set(entry, retained);
+	}
+	const key = contributionKey(valid.owner, valid.id);
+	retained.delete(key);
+	retained.set(key, valid);
+	for (const old of retained.values()) {
+		if (retained.size <= MAX_RETAINED_BROWSER_UI) break;
+		disposeBrowserUi(entry, old.owner, old.id, "browser_ui contribution evicted by newer ones");
+	}
+}
+
+/**
+ * The kept display contributions as `ui_request` frames for a client being primed, one per
+ * (owner, id). One still live keeps its request id, so a resumed client that already shows it
+ * replaces it in place. One with no live request (set while no client was attached, or whose
+ * request ended when the last client left or a client dismissed it) is registered as a live
+ * request without a broadcast: the clients already attached are not shown it again.
+ */
+export function browserUiPrimeFrames(entry: SessionEntry): ServerFrame[] {
+	const retained = retainedByEntry.get(entry);
+	if (!retained) return [];
+	const frames: ServerFrame[] = [];
+	for (const [key, contribution] of retained) {
+		const live = activeByEntry.get(entry)?.get(key);
+		let id: string;
+		if (live?.contribution === contribution && entry.pendingUiRequests.has(live.requestId)) {
+			id = live.requestId;
+		} else {
+			const primedId = `uib${nextPrimedRequestId++}`;
+			id = primedId;
+			void showContribution(entry, contribution, (onRegistered) => {
+				const targets = new Set<ClientConsumer>();
+				for (const stream of streams) if (stream.attached === entry.handle) targets.add(stream);
+				const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+				entry.pendingUiRequests.set(primedId, {
+					streams: targets,
+					method: BROWSER_UI_METHOD,
+					params: contribution,
+					resolve,
+					reject,
+				});
+				onRegistered(primedId);
+				return promise;
+			}).catch((err: unknown) => logEnded(contribution.kind, contribution.id, err));
+		}
+		frames.push({ type: "ui_request", id, method: BROWSER_UI_METHOD, params: contribution });
+	}
+	return frames;
+}
+
+// ---------------------------------------------------------------------------
+// Terminal hooks -> browser contributions.
 // ---------------------------------------------------------------------------
 
 /** Default owner for adapter-sent contributions (callers may pass their own per-extension owner). */
 export const TERMINAL_HOOKS_OWNER = "terminal-hooks";
 
-function hookUnsupported(hook: string, capability: BrowserUiCapability, detail: string): Error {
-	return new Error(
-		`${hook} is not supported in the web host: ${detail} ` +
-			`(browser capability "${capability}"; migration: wrapTerminalHooks() in apps/session/browser-ui.ts; ` +
-			`see ${BROWSER_UI_DOC})`,
+/** Logs a contribution that ended unexpectedly; an owner's own update or dispose is routine. */
+function logEnded(kind: BrowserUiCapability, id: string, err: unknown): void {
+	if (err instanceof BrowserUiReplacedError) return;
+	console.error(
+		`omp-session: browser_ui ${kind} "${id}" ended: ${err instanceof Error ? err.message : String(err)}`,
 	);
-}
-
-function hookIsolation(hook: string, detail: string): Error {
-	return new Error(
-		`${hook} is not supported in the web host: ${detail} ` +
-			`Executable extension code requires an isolation contract the browser host does not provide; ` +
-			`contribute declarative text/code/list/actions blocks instead (see ${BROWSER_UI_DOC}).`,
-	);
-}
-
-function hookRejected(
-	hook: string,
-	capability: BrowserUiCapability,
-	detail: string,
-): Promise<never> {
-	return Promise.reject(hookUnsupported(hook, capability, detail));
 }
 
 /**
- * wrapTerminalHooks-style migration adapter. Presentation hooks with a
- * browser equivalent become browser_ui contributions (fire-and-forget:
- * sync hooks cannot await answers; transport failures log to stderr, never
- * stdout); hooks without one throw/reject explicit unsupported errors.
- * Non-presentation hooks (select/confirm/input/editor/askDialog/formDialog/approve/notify)
- * pass through untouched from `base`; a base without `formDialog` leaves the ask tool on
- * its field-by-field fallback.
+ * The whole ExtensionUIContext over the dialog subset in `base`: select, confirm, input,
+ * editor, askDialog, formDialog, approve and notify pass through untouched (a base without
+ * `formDialog` leaves the ask tool on its field-by-field fallback).
+ *
+ * Every other hook is presentation or terminal-only. Extensions written for the SDK's terminal
+ * and remote hosts call them whenever `ctx.hasUI` is true, often from un-awaited async code,
+ * where a throw becomes an unhandled rejection that ends the session process. So none of them
+ * throws or rejects; each behaves as on the SDK's remote hosts (modes/rpc/rpc-mode.ts
+ * RpcExtensionUIContext, modes/acp/acp-agent.ts createAcpExtensionUiContext):
+ * - status, working message and string-array widgets become browser_ui contributions: the
+ *   latest one per key is kept whether or not a browser is attached (see
+ *   {@link browserUiPrimeFrames}) and goes out at once to any attached browser; passing
+ *   `undefined` clears it; an invalid payload or a later transport failure logs to stderr,
+ *   never stdout;
+ * - a widget's component factory, custom footers, headers and editors, the window title,
+ *   writing to the composer, autocomplete providers and theme switching are no-ops, so no
+ *   executable code reaches the browser;
+ * - `custom` resolves `undefined` and `onTerminalInput` returns a no-op unsubscribe;
+ * - getters answer as those hosts do: `theme` is the pi-tui singleton (initSdkTuiGlobals loads
+ *   it at boot), no editor text or editor component, no other themes, tools collapsed.
  */
 export function wrapTerminalHooks(
 	entry: SessionEntry,
@@ -186,8 +269,6 @@ export function wrapTerminalHooks(
 	>,
 	owner: string = TERMINAL_HOOKS_OWNER,
 ): ExtensionUIContext {
-	// SDK presentation setters are synchronous: reject malformed payloads and
-	// absent clients synchronously; report later transport/disposal failures.
 	const send = (
 		id: string,
 		kind: BrowserUiCapability,
@@ -195,21 +276,23 @@ export function wrapTerminalHooks(
 		blocks: BrowserUiBlock[],
 		placement?: BrowserUiPayload["placement"],
 	): void => {
-		const contribution = buildBrowserUiParams({
-			id,
-			kind,
-			owner,
-			title,
-			payload: placement === undefined ? { blocks } : { blocks, placement },
-			version: BROWSER_UI_VERSION,
-		});
-		if (!hasBrowserUiClient(entry))
-			throw new Error("No connected client to receive browser UI contribution");
-		void requestBrowserUi(entry, contribution).catch((err: unknown) => {
-			console.error(
-				`omp-session: browser_ui ${kind} "${id}" ended: ${err instanceof Error ? err.message : String(err)}`,
-			);
-		});
+		try {
+			const contribution = buildBrowserUiParams({
+				id,
+				kind,
+				owner,
+				title,
+				payload: placement === undefined ? { blocks } : { blocks, placement },
+				version: BROWSER_UI_VERSION,
+			});
+			retain(entry, contribution);
+			if (!hasBrowserUiClient(entry)) return;
+			void showContribution(entry, contribution, (onRegistered) =>
+				webUiRequest(entry, BROWSER_UI_METHOD, contribution, onRegistered),
+			).catch((err: unknown) => logEnded(kind, id, err));
+		} catch (err) {
+			logEnded(kind, id, err);
+		}
 	};
 	return {
 		select: base.select,
@@ -220,18 +303,11 @@ export function wrapTerminalHooks(
 		formDialog: base.formDialog,
 		approve: base.approve,
 		notify: base.notify,
-		get theme(): never {
-			throw hookUnsupported("theme", "renderer", "terminal themes are unavailable in the browser");
+		get theme() {
+			return theme;
 		},
-		onTerminalInput: () => {
-			throw hookUnsupported(
-				"onTerminalInput",
-				"composer",
-				"the browser has no raw keystroke channel (composer covers submitted text, not keystrokes)",
-			);
-		},
-		// The SDK contract outside the interactive terminal: no reply or transcript block to
-		// redraw, no pickable links.
+		onTerminalInput: () => () => {},
+		// No reply or transcript block to redraw, no pickable links.
 		rerenderMessage: () => {},
 		refreshTranscript: () => {},
 		getLinkClicksAvailable: () => false,
@@ -240,150 +316,53 @@ export function wrapTerminalHooks(
 				disposeBrowserUi(entry, owner, `status:${key}`);
 				return;
 			}
-			send(`status:${key}`, "panel", `Status: ${key}`, [{ type: "text", text }]);
+			send(`status:${key}`, "panel", `Status: ${key}`, [
+				{ type: "text", text: Bun.stripANSI(text) },
+			]);
 		},
 		setWorkingMessage: (message) => {
 			if (message === undefined) {
 				disposeBrowserUi(entry, owner, "working");
 				return;
 			}
-			send("working", "panel", "Working", [{ type: "text", text: message }]);
+			send("working", "panel", "Working", [{ type: "text", text: Bun.stripANSI(message) }]);
 		},
 		setWidget: (key, content, options) => {
 			if (content === undefined) {
 				disposeBrowserUi(entry, owner, `widget:${key}`);
 				return;
 			}
-			if (typeof content === "function") {
-				throw hookIsolation(
-					"setWidget",
-					`widget "${key}" is a component factory, which is executable code.`,
-				);
-			}
-			if (!Array.isArray(content)) {
-				throw hookUnsupported(
-					"setWidget",
-					"widget",
-					`widget "${key}" content must be a string array or undefined (got ${typeof content})`,
-				);
-			}
-			const blocks: BrowserUiBlock[] = content.map((line, i) => {
-				if (typeof line !== "string") {
-					throw hookUnsupported(
-						"setWidget",
-						"widget",
-						`widget "${key}" line #${i} must be a string (got ${typeof line})`,
-					);
-				}
-				return { type: "text", text: line } as BrowserUiBlock;
-			});
+			// A component factory draws in a terminal only (the SDK's built-in autoresearch
+			// extension sets one: pi-tui/src/apps/autoresearch-dashboard.ts updateWidget).
+			if (!Array.isArray(content)) return;
+			// Extensions color these lines with the terminal theme; the browser shows plain text.
+			const blocks = content.map((line): BrowserUiBlock => ({
+				type: "text",
+				text: Bun.stripANSI(String(line)),
+			}));
 			send(`widget:${key}`, "widget", `Widget: ${key}`, blocks, options?.placement);
 		},
-		setFooter: (factory) => {
-			if (factory !== undefined) {
-				throw hookIsolation(
-					"setFooter",
-					"custom footers are component factories, which are executable code.",
-				);
-			}
-			throw hookUnsupported("setFooter", "renderer", "terminal footer chrome is unavailable");
-		},
-		setHeader: (factory) => {
-			if (factory !== undefined) {
-				throw hookIsolation(
-					"setHeader",
-					"custom headers are component factories, which are executable code.",
-				);
-			}
-			throw hookUnsupported("setHeader", "renderer", "terminal header chrome is unavailable");
-		},
-		setTitle: (title) => {
-			throw hookUnsupported(
-				"setTitle",
-				"panel",
-				`the browser tab title is user-controlled and has no per-session channel (got ${JSON.stringify(title)}); send panel status text instead`,
-			);
-		},
-		custom: () =>
-			Promise.reject(
-				hookIsolation(
-					"custom",
-					"custom components are focused component factories, which are executable code.",
-				),
-			),
-		setEditorText: (text) => {
-			throw hookUnsupported(
-				"setEditorText",
-				"editor",
-				`the browser has no shared composer channel (got ${text.length} chars); use the editor() dialog`,
-			);
-		},
-		pasteToEditor: (text) => {
-			throw hookUnsupported(
-				"pasteToEditor",
-				"editor",
-				`the browser has no shared composer channel (got ${text.length} chars); use the editor() dialog`,
-			);
-		},
-		getEditorText: () => {
-			throw hookUnsupported(
-				"getEditorText",
-				"editor",
-				"the browser composer is web-local and unreadable here; use the editor() dialog",
-			);
-		},
-		addAutocompleteProvider: () => {
-			throw hookUnsupported(
-				"addAutocompleteProvider",
-				"completion",
-				"the browser has no completion-provider channel for extensions",
-			);
-		},
-		setEditorComponent: (factory) => {
-			if (factory === undefined)
-				throw hookUnsupported(
-					"setEditorComponent",
-					"composer",
-					"terminal editor chrome is unavailable",
-				);
-			throw hookIsolation(
-				"setEditorComponent",
-				"custom editors are component factories, which are executable code.",
-			);
-		},
-		// setEditorComponent never installs a factory here, so there is none to wrap.
+		setFooter: () => {},
+		setHeader: () => {},
+		// The browser tab title is the user's; there is no per-session title channel.
+		setTitle: () => {},
+		custom: async () => undefined as never,
+		// The browser composer is web-local: extensions can neither write nor read it.
+		setEditorText: () => {},
+		pasteToEditor: () => {},
+		getEditorText: () => "",
+		addAutocompleteProvider: () => {},
+		setEditorComponent: () => {},
 		getEditorComponent: () => undefined,
-		getAllThemes: () =>
-			hookRejected(
-				"getAllThemes",
-				"renderer",
-				"browser theming is a user setting, not an extension channel",
-			),
-		getTheme: () =>
-			hookRejected(
-				"getTheme",
-				"renderer",
-				"browser theming is a user setting, not an extension channel",
-			),
-		setTheme: () =>
-			hookRejected(
-				"setTheme",
-				"renderer",
-				"browser theming is a user setting, not an extension channel",
-			),
-		getToolsExpanded: () => {
-			throw hookUnsupported(
-				"getToolsExpanded",
-				"panel",
-				"tool-output expansion state is web-local and unreadable here",
-			);
-		},
-		setToolsExpanded: (expanded) => {
-			throw hookUnsupported(
-				"setToolsExpanded",
-				"panel",
-				`tool-output expansion state is web-local (got ${expanded})`,
-			);
-		},
+		// Browser theming is a user setting, not an extension channel.
+		getAllThemes: async () => [],
+		getTheme: async () => undefined,
+		setTheme: async () => ({
+			success: false,
+			error: "Theme changes are unavailable in the web host",
+		}),
+		// Tool-output expansion is web-local.
+		getToolsExpanded: () => false,
+		setToolsExpanded: () => {},
 	};
 }

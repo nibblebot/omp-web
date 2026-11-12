@@ -8,6 +8,8 @@
  */
 import { afterAll, expect, test } from "bun:test";
 import type { Subprocess } from "bun";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
 	CALLBACK_CLOSE_REFUSAL_BASE,
 	CALLBACK_CONTROL_STREAM_ID,
@@ -112,11 +114,18 @@ function callResultId(envelope: CallbackEnvelope): string | undefined {
 	return payload.id;
 }
 
+/** A frame payload on one browser stream, with the fields these tests read. */
+interface StreamFrame {
+	type?: unknown;
+	id?: unknown;
+	method?: unknown;
+	params?: unknown;
+	messages?: unknown;
+	state?: unknown;
+}
+
 /** The frame payload of an envelope on `streamId`, or undefined for any other envelope. */
-function streamFrame(
-	envelope: CallbackEnvelope,
-	streamId: string,
-): { type?: unknown; id?: unknown; messages?: unknown; state?: unknown } | undefined {
+function streamFrame(envelope: CallbackEnvelope, streamId: string): StreamFrame | undefined {
 	if (envelope.kind !== "frame" || envelope.streamId !== streamId) return undefined;
 	const payload = envelope.payload;
 	return typeof payload === "object" && payload !== null ? payload : undefined;
@@ -598,3 +607,47 @@ test("a state snapshot carries the ids of the ui_requests pending at that moment
 	fleet.send(CALLBACK_TRANSPORT_STREAM_ID, "control", { type: "shutdown", reason: "test" });
 	expect(await exitWithin(child, 20_000)).toBe(0);
 });
+
+test("an extension status kept for browsers is no pending request and does not hold idle exit", async () => {
+	// A user extension that sets its status once, at session start, before any browser attaches.
+	const agentDir = tempDir("omp-session-cp-agent-");
+	await mkdir(join(agentDir, "extensions"));
+	await writeFile(
+		join(agentDir, "extensions", "status-probe.ts"),
+		'export default (pi) => pi.on("session_start", (_event, ctx) => ctx.ui.setStatus("probe", "Indexing"));\n',
+	);
+	const fleet = trackFleet();
+	const child = spawnSession(fleet.url, {
+		OMP_SESSION_CONTROL_GRACE: "0",
+		OMP_SESSION_IDLE_TIMEOUT: "3s",
+		OMP_SESSION_TEST_IDLE_CHECK_MS: "200",
+		PI_CODING_AGENT_DIR: agentDir,
+	});
+	await fleet.paired;
+	const isStatus = (frame: StreamFrame | undefined) =>
+		frame?.type === "ui_request" && frame.method === "browser_ui";
+	const pendingIds = (streamId: string): unknown => {
+		const frame = fleet.up.map((e) => streamFrame(e, streamId)).find((f) => f?.type === "state");
+		const state = frame?.state;
+		return typeof state === "object" && state !== null && "pendingUiRequestIds" in state
+			? state.pendingUiRequestIds
+			: undefined;
+	};
+
+	// The first browser is primed with the status: it is live for that browser to dismiss.
+	fleet.send("browser/one", "control", { type: "stream_open" });
+	await fleet.waitForUp((e) => isStatus(streamFrame(e, "browser/one")), 1);
+	expect(fleet.up.map((e) => streamFrame(e, "browser/one")).find(isStatus)).toMatchObject({
+		params: { id: "status:probe" },
+	});
+	// A second browser's state snapshot is taken while it is live, and lists no pending request.
+	fleet.send("browser/two", "control", { type: "stream_open" });
+	await fleet.waitForUp((e) => streamFrame(e, "browser/two")?.type === "state", 1);
+	expect(pendingIds("browser/two")).toEqual([]);
+
+	// With every browser gone the status is still kept (and still live on the pair), yet the
+	// session idle-exits. Real time: the 3s idle timeout must elapse.
+	fleet.send("browser/one", "control", { type: "stream_close" });
+	fleet.send("browser/two", "control", { type: "stream_close" });
+	expect(await exitWithin(child, 15_000)).toBe(0);
+}, 30_000);

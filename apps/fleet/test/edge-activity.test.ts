@@ -3,7 +3,7 @@
  * {type:"session_activity"} frames derived from the frames each session
  * mirrors onto its callback pair's control stream (state and agent_start ->
  * streaming, ui_request / ui_request_end and state pendingUiRequestIds ->
- * blocked), reset when the row's process is gone. The only session is the shared
+ * blocked, except browser_ui display contributions), reset when the row's process is gone. The only session is the shared
  * callback-pair fake dialing OUT to a real SessionTransportRegistry; the
  * fleet never dials a session.
  */
@@ -58,6 +58,16 @@ function dialogOpen(id: string) {
 
 function dialogEnd(id: string) {
 	return { type: "ui_request_end", id };
+}
+
+/** An extension's status, working message or widget: shown, never waited on. */
+function contributionOpen(id: string) {
+	return {
+		type: "ui_request",
+		id,
+		method: "browser_ui",
+		params: { id: "status:probe", kind: "panel", owner: "terminal-hooks", title: "Status: probe" },
+	};
 }
 
 function agentEnd(fields: Record<string, unknown>) {
@@ -295,6 +305,57 @@ describe("edge realtime session activity (callback control stream)", () => {
 				streaming: true,
 				blocked: false,
 			});
+		} finally {
+			await s.teardown();
+		}
+	});
+
+	test("a browser_ui display contribution never blocks the session; a dialog beside it still blocks and clears", async () => {
+		const s = await setup();
+		try {
+			const { entry, session } = await s.addSession("display");
+			const browser = await s.browser();
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(false, []));
+			await waitFor(
+				() => (activityFrames(browser, entry.workspaceId).length === 1 ? "ok" : null),
+				3000,
+				"known activity",
+			);
+
+			// The contribution changes nothing; the dialog after it is the ordered barrier.
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", contributionOpen("b1"));
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogOpen("r1"));
+			await waitFor(
+				() => (activityFrames(browser, entry.workspaceId).length === 2 ? "ok" : null),
+				3000,
+				"blocked by the dialog",
+			);
+			expect(activityFrames(browser, entry.workspaceId).at(-1)).toMatchObject({ blocked: true });
+
+			// Ending the contribution does not unblock; ending the dialog does.
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogEnd("b1"));
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", dialogEnd("r1"));
+			await waitFor(
+				() => (activityFrames(browser, entry.workspaceId).length === 3 ? "ok" : null),
+				3000,
+				"unblocked by the dialog's end",
+			);
+			expect(activityFrames(browser, entry.workspaceId).at(-1)).toMatchObject({ blocked: false });
+
+			// A session that still lists a contribution among its pending ids does not block either.
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", contributionOpen("b2"));
+			session.send(CALLBACK_CONTROL_STREAM_ID, "frame", stateFrame(true, ["b2"]));
+			await waitFor(
+				() => (activityFrames(browser, entry.workspaceId).length === 4 ? "ok" : null),
+				3000,
+				"streaming, still unblocked",
+			);
+			expect(activityFrames(browser, entry.workspaceId).at(-1)).toMatchObject({
+				streaming: true,
+				blocked: false,
+			});
+			expect(activityFrames(browser, entry.workspaceId)).toHaveLength(4);
+			expect(s.edge.sessionActivity(entry.workspaceId)).toMatchObject({ blocked: false });
 		} finally {
 			await s.teardown();
 		}

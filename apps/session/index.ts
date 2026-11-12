@@ -110,7 +110,9 @@ import {
 } from "./client-delivery";
 import { clearSubagents } from "./subagent-mirror";
 import { jobWidgetPrimeFrames } from "./job-widgets";
+import { browserUiPrimeFrames } from "./browser-ui";
 import {
+	openDialogIds,
 	pendingUiRequestFrames,
 	rejectEntryUiRequests,
 	rejectStreamUiRequests,
@@ -354,6 +356,8 @@ function primingFrames(
 		},
 		// A dialog still open must reach a client that attaches after it was sent.
 		...pendingUiRequestFrames(entry),
+		// Extensions' current statuses, working messages and widgets, set before this client came.
+		...browserUiPrimeFrames(entry),
 		// The running background jobs' widget glances (nothing while none runs).
 		...jobWidgetPrimeFrames(entry),
 		// The SDK's start-up model-fallback warning, once, to the first client that attaches.
@@ -1603,7 +1607,8 @@ function isIdleSuppressed(): boolean {
 	if (bootEntry) {
 		if (bootEntry.session.isStreaming) return true;
 		if (bootEntry.session.queuedMessageCount > 0) return true;
-		if (bootEntry.pendingUiRequests.size > 0) return true;
+		// A dialog waits on the user; an extension's status or widget does not.
+		if (openDialogIds(bootEntry).length > 0) return true;
 		if (bootEntry.collab.adapter?.isLive || bootEntry.collab.starting) return true;
 	}
 	return false;

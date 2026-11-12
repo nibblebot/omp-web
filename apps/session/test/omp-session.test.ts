@@ -14,7 +14,7 @@
 
 import { afterAll, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Subprocess } from "bun";
@@ -117,12 +117,15 @@ interface SessionProc {
 	cleanup: () => Promise<void>;
 }
 
-/** Spawn apps/session/index.ts on an ephemeral port with a hermetic tmp cwd. */
+/**
+ * Spawn apps/session/index.ts on an ephemeral port with a hermetic tmp cwd; `agentDir` is a
+ * prepared agent dir (its `extensions/` load like a user's), a fresh one by default.
+ */
 async function spawnSession(
-	opts: { args?: string[]; env?: Record<string, string> } = {},
+	opts: { args?: string[]; env?: Record<string, string>; agentDir?: string } = {},
 ): Promise<SessionProc> {
 	const tmp = await mkdtemp(path.join(os.tmpdir(), "omp-session-test-"));
-	const agentDir = tempDir("omp-session-agent-");
+	const agentDir = opts.agentDir ?? tempDir("omp-session-agent-");
 	const child = Bun.spawn(["bun", "apps/session/index.ts", ...(opts.args ?? [])], {
 		cwd: repoRoot,
 		env: {
@@ -537,6 +540,40 @@ test("an open socket suppresses idle auto-exit; closing it lets the session exit
 	socket.close();
 	// The socket closed → nothing suppresses idle: the next tick (≤250ms)
 	// finds it idle and shutdown() exits 0.
+	const code = await Promise.race([child.exited, sleep(10_000).then(() => "timeout" as const)]);
+	expect(code).toBe(0);
+	await cleanup();
+}, 30_000);
+
+test("an extension status kept with no client neither shows as a pending request nor holds idle exit", async () => {
+	const agentDir = tempDir("omp-session-agent-");
+	await mkdir(path.join(agentDir, "extensions"));
+	await writeFile(
+		path.join(agentDir, "extensions", "status-probe.ts"),
+		'export default (pi) => pi.on("session_start", (_event, ctx) => ctx.ui.setStatus("probe", "Indexing"));\n',
+	);
+	const proc = await spawnSession({
+		args: ["--idle-timeout", "1s"],
+		env: { OMP_SESSION_TEST_IDLE_CHECK_MS: "250" },
+		agentDir,
+	});
+	running.push(proc);
+	const { child, port, cleanup } = proc;
+	// Set at session start, before anyone attached: the first client is primed with it, and the
+	// session reports no request waiting on the user.
+	const socket = await openBrowserSocket(`http://127.0.0.1:${port}`);
+	await waitForFrame(socket.frames, "collab_status", 10_000, "priming through collab_status");
+	expect(socket.frames).toContainEqual(
+		expect.objectContaining({
+			type: "ui_request",
+			method: "browser_ui",
+			params: expect.objectContaining({ id: "status:probe" }),
+		}),
+	);
+	const state = await waitForFrame(socket.frames, "state", 10_000, "state");
+	expect(state).toMatchObject({ state: { pendingUiRequestIds: [] } });
+	socket.close();
+	// The status outlives the client; the session still exits on the next idle tick (≤250ms past 1s).
 	const code = await Promise.race([child.exited, sleep(10_000).then(() => "timeout" as const)]);
 	expect(code).toBe(0);
 	await cleanup();
