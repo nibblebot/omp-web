@@ -2,7 +2,8 @@
  * A plain-folder project (RegisteredProject.git === false) has no worktrees,
  * branches or diffstats: its rows lead with the session title and offer no
  * worktree actions, and its header has no "+" to create a workspace. A clone
- * in the same project, and every row of a git project, are unaffected.
+ * in the same project, and every row of a git project, are unaffected. With the
+ * title-first setting a git row leads with its title too, placeholder or not.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createComponent } from "solid-js";
@@ -133,6 +134,20 @@ describe("plain-folder rows", () => {
 		expect(topLine(html)).not.toContain(TITLE);
 		expect(html).toContain(TITLE);
 		expect(html).toContain("3 files changed");
+	});
+});
+
+describe("title-first git rows", () => {
+	test.each([
+		["a session title", { sessionTitle: TITLE }, TITLE],
+		["the New session placeholder", { sessionTitle: undefined }, "New session"],
+	] as const)("lead with %s and move the branch off the top line", (_, extra, text) => {
+		setState("sidebarTitleFirst", true);
+		const html = renderRow(worktreeRow(extra), true);
+		expect(html).toContain("roster-row--title-first");
+		expect(topLine(html)).toContain(text);
+		expect(topLine(html)).not.toContain(BRANCH);
+		expect(html).toContain(BRANCH);
 	});
 });
 

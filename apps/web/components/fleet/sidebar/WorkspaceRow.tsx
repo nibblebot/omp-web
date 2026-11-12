@@ -57,10 +57,10 @@ import {
 // ready row carries a rail on its right edge instead of a dot. Ready rows attach
 // on click, asleep rows wake-then-attach. The group header names the project; the
 // full path lives in the hover tooltip. Touch keeps the chevron, "+" and "⋯"
-// visible at 44px. With the title-first setting (sidebarTitleFirst) a row with a
-// real title swaps the two: the session title leads the top line, flush left,
-// and the kind icon + branch move in small gray text to the head of the diffstat
-// line. A row of a non-git project (a plain folder) has no branch, kind icon or
+// visible at 44px. With the title-first setting (sidebarTitleFirst) the two
+// swap: the session title (or its muted placeholder) leads the top line, flush
+// left, and the kind icon + branch move in small gray text to the head of the
+// diffstat line. A row of a non-git project (a plain folder) has no branch, kind icon or
 // diffstat and always leads with the title; it offers every action but "Delete
 // worktree".
 // ---------------------------------------------------------------------------
@@ -160,9 +160,9 @@ export const WorkspaceRow: Component<{
 		equals: (a, b) => a.text === b.text && a.placeholder === b.placeholder,
 	});
 	/** The title leads the top line (the branch moves to the diffstat line) for a
-	 *  non-git row, and for a git row with the title-first setting once it has a
-	 *  real title; a placeholder never counts as a title for that. */
-	const titleOnTop = () => nonGit() || (state.sidebarTitleFirst && !title().placeholder);
+	 *  non-git row, and for a git row with the title-first setting, placeholder
+	 *  titles included so every row keeps one layout. */
+	const titleOnTop = () => nonGit() || state.sidebarTitleFirst;
 
 	// Worktree sessions belong to a main checkout and read as branches, not
 	// dirs. The branch (or name fallback) becomes the title and the project

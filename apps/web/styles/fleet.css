@@ -1035,11 +1035,9 @@
 	min-width: 0;
 }
 /* Asleep rows quiet the title with the contrast-checked `muted` color, not opacity
-   (which would drop it below 4.5:1). Italic keeps the cue in light palettes where
-   muted sits close to the text color. */
+   (which would drop it below 4.5:1). */
 .roster-row--asleep .roster-row-title {
 	color: var(--muted);
-	font-style: italic;
 }
 /* The icon sits in a fixed-width box so every row's icon and branch text line up. */
 .session-kind-icon {

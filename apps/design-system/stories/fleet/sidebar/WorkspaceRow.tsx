@@ -217,7 +217,8 @@ export default defineStory({
 		},
 		{
 			name: "Title first, no session title (setting on)",
-			description: "A row without a session title keeps the branch on the top line.",
+			description:
+				"A row without a session title leads with its muted placeholder, like a titled row.",
 			seed: { sidebarTitleFirst: true },
 			render: () => <Row session={withTitle(undefined)} />,
 		},
