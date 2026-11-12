@@ -75,6 +75,7 @@ import {
 	readErrorTool,
 	readLongTool,
 	readRunningTool,
+	taskBatchStepsTool,
 	taskDoneTool,
 	taskErrorTool,
 	taskFileTool,
@@ -84,6 +85,7 @@ import {
 	taskStageTool,
 	taskStatsSubagentMap,
 	taskStatsTool,
+	taskStepsSubagentMap,
 	taskStepsTool,
 	taskSubagentMap,
 	todoArgsTool,
@@ -628,8 +630,16 @@ const stories: Story[] = [
 			{
 				name: "Ordered steps",
 				description:
-					"`task.steps` call: no `task` text, so the card is labelled by its first step.",
+					"`task.steps` call: no `task` text, so the card is labelled by its first step and lists all steps in order above the spawned agent. The SDK reports no current-step marker, so the list is the plan only.",
+				seed: { subagents: taskStepsSubagentMap },
 				render: () => <TaskToolCard item={taskStepsTool} />,
+			},
+			{
+				name: "Batch with ordered steps",
+				description:
+					"A `tasks[]` call: each item with `steps` lists its own plan (named after the item, else Task N); the plain `task` item lists none.",
+				seed: { subagents: taskStepsSubagentMap },
+				render: () => <TaskToolCard item={taskBatchStepsTool} />,
 			},
 			{
 				name: "Before SDK 18.19.0: task file call",

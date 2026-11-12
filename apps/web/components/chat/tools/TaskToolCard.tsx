@@ -1,5 +1,6 @@
-import { createMemo, Show, type Component } from "solid-js";
+import { createMemo, For, Show, type Component } from "solid-js";
 import { effectiveStatus } from "../../../chat/background-job";
+import { taskSpawnSteps } from "../../../chat/task-steps";
 import type { ToolItem } from "../../../state";
 import { openActivities } from "../../../store/activities";
 import { fanoutTotals, subagentTree } from "../../../store/subagents";
@@ -9,7 +10,8 @@ import { createStableSubagentOrder } from "../../../subagents/tree";
 import { ToolCardShell } from "./ToolCardShell";
 
 /** task tool: the agent tree this tool call spawned (scoped by parentToolCallId), in a
- *  remembered order (createStableSubagentOrder). Rows open the agent pane; the header totals the whole fan-out. */
+ *  remembered order (createStableSubagentOrder). Rows open the agent pane; the header totals the whole fan-out.
+ *  A `task.steps` call also lists each spawn's planned steps (the SDK reports no current-step marker, so no step state). */
 export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 	const description = () => {
 		const args = props.item.args as {
@@ -19,7 +21,7 @@ export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 			taskFile?: string;
 			prompt?: string;
 		} | null;
-		// `task.steps` replaces `task` with ordered `steps`; the first one names the call.
+		// `task.steps` replaces `task` with ordered `steps`; the first one names the call (the plan lists them all).
 		const firstStep = Array.isArray(args?.steps)
 			? args.steps.find((step) => typeof step === "string")
 			: undefined;
@@ -27,6 +29,7 @@ export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 		return args?.description ?? args?.task ?? firstStep ?? args?.taskFile ?? args?.prompt ?? "";
 	};
 	const order = createStableSubagentOrder();
+	const plans = createMemo(() => taskSpawnSteps(props.item.args));
 	// One evaluation per forest build, shared by every read below; a card whose agents did not change gets
 	// the same arrays back and updates nothing.
 	const forest = createMemo(() => order(subagentTree(props.item.toolCallId)));
@@ -44,6 +47,16 @@ export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 				</Show>
 			}
 		>
+			<For each={plans()}>
+				{(plan) => (
+					<div class="task-plan">
+						<div class="task-plan-name">{plan.label ?? "Steps"}</div>
+						<ol class="task-plan-steps">
+							<For each={plan.steps}>{(step) => <li class="task-plan-step">{step}</li>}</For>
+						</ol>
+					</div>
+				)}
+			</For>
 			<Show when={forest().length > 0}>
 				<SubagentTree
 					nodes={forest()}

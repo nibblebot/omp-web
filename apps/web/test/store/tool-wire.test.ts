@@ -368,6 +368,89 @@ describe("live eval and wait status on the wire", () => {
 		});
 	});
 
+	test("a github run watch's steps reach the card on each poll, a late joiner is primed, and settling keeps the details", async () => {
+		const watchDetails = (stepStatus: string, seconds: number, pollCount: number) => ({
+			repo: "o/r",
+			runId: 7,
+			watch: {
+				mode: "run",
+				state: "watching",
+				repo: "o/r",
+				pollCount,
+				run: {
+					id: 7,
+					workflowName: "CI",
+					status: "in_progress",
+					jobs: [
+						{
+							id: 1,
+							name: "test",
+							status: "in_progress",
+							durationSeconds: seconds,
+							steps: [
+								{ number: 1, name: "Run tests", status: stepStatus, durationSeconds: seconds },
+							],
+						},
+					],
+				},
+			},
+		});
+		const entry = freshEntry();
+		attachMidTool();
+		deliver(entry, start);
+		const first = deliver(
+			entry,
+			partial("github", "Status: in_progress", watchDetails("in_progress", 5, 1)),
+		);
+		await tick();
+		expect(first).toMatchObject({
+			watch: {
+				mode: "run",
+				run: { jobs: [{ steps: [{ name: "Run tests", durationSeconds: 5 }] }] },
+			},
+		});
+		expect(JSON.stringify(first)).not.toContain("pollCount");
+		expect(toolCard().watch?.run?.jobs[0]?.steps?.[0]).toMatchObject({ status: "in_progress" });
+
+		// Only the poll counter moved: nothing to send.
+		expect(
+			deliver(entry, partial("github", "Status: in_progress", watchDetails("in_progress", 5, 2))),
+		).toBeNull();
+		// A step finished: the whole snapshot goes out as an empty append.
+		const next = deliver(
+			entry,
+			partial("github", "Status: in_progress", watchDetails("completed", 9, 3)),
+		);
+		expect(next).toMatchObject({
+			output: "",
+			append: true,
+			watch: { run: { jobs: [{ durationSeconds: 9 }] } },
+		});
+		await tick();
+		expect(toolCard().watch?.run?.jobs[0]?.steps?.[0]).toMatchObject({
+			status: "completed",
+			durationSeconds: 9,
+		});
+
+		// A late joiner is primed with the last snapshot.
+		const primed = streamingPrimeFrames(entry);
+		expect(primed).toHaveLength(1);
+		expect(primed[0]).toMatchObject({ event: { toolName: "github", watch: { run: { id: 7 } } } });
+
+		// The settled result ships its details whole.
+		const settled = {
+			repo: "o/r",
+			watch: { ...watchDetails("completed", 12, 4).watch, state: "completed" },
+		};
+		deliver(entry, {
+			type: "tool_execution_end",
+			toolCallId: CALL,
+			toolName: "github",
+			result: { content: [{ type: "text", text: "All jobs passed." }], details: settled },
+		} as unknown as AgentSessionEvent);
+		expect(toolCard()).toMatchObject({ status: "done", details: settled });
+	});
+
 	test("a browser that attaches mid-call is primed with the live status, and a resync resends it", async () => {
 		const entry = freshEntry();
 		attachMidTool();

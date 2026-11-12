@@ -8,6 +8,7 @@ import type {
 	QueuedMessageRef,
 	WireSessionEvent,
 	WireAsyncFrame,
+	WireGithubWatch,
 	WireToolLive,
 } from "#lib/wire/protocol";
 import { extractText, scanImages } from "#lib/wire/tool-result";
@@ -492,6 +493,8 @@ interface PendingToolUpdate {
 	job: WireAsyncFrame | undefined;
 	/** The call's `out://` replies so far; the newest list wins. */
 	replies: string[] | undefined;
+	/** The call's Actions run watch so far; the newest snapshot wins. */
+	watch: WireGithubWatch | undefined;
 }
 
 /**
@@ -506,6 +509,7 @@ function applyToolUpdate(item: ToolItem, update: PendingToolUpdate): void {
 		item.images = update.images;
 	if (update.live !== undefined) item.live = { ...update.live, at: Date.now() };
 	if (update.replies !== undefined) item.replies = update.replies;
+	if (update.watch !== undefined) item.watch = update.watch;
 	const job = update.job;
 	if (job !== undefined && job.state !== "running" && item.background !== undefined) {
 		settleBackground(item, {
@@ -794,6 +798,7 @@ export function applyEvent(e: WireSessionEvent): void {
 					if (pending !== undefined) {
 						pending.job = job;
 						if (e.replies !== undefined) pending.replies = e.replies;
+						if (e.watch !== undefined) pending.watch = e.watch;
 					} else
 						pendingToolUpdates.set(e.toolCallId, {
 							output: "",
@@ -802,12 +807,14 @@ export function applyEvent(e: WireSessionEvent): void {
 							live: e.live,
 							job,
 							replies: e.replies,
+							watch: e.watch,
 						});
 				} else if (e.append === true && pending !== undefined) {
 					pending.output = capTail(pending.output + output, 8000);
 					if (images !== undefined) pending.images = images;
 					if (e.live !== undefined) pending.live = e.live;
 					if (e.replies !== undefined) pending.replies = e.replies;
+					if (e.watch !== undefined) pending.watch = e.watch;
 					pending.job = job;
 				} else {
 					pendingToolUpdates.set(e.toolCallId, {
@@ -817,6 +824,7 @@ export function applyEvent(e: WireSessionEvent): void {
 						live: e.live ?? pending?.live,
 						job,
 						replies: e.replies ?? pending?.replies,
+						watch: e.watch ?? pending?.watch,
 					});
 				}
 				const card = state.items[index];

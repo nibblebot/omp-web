@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
+import type { WireGithubWatch } from "#lib/wire/protocol";
 import type { SessionEntry } from "../session-entry";
 import {
 	broadcastHistory,
@@ -408,6 +409,105 @@ describe("out:// replies", () => {
 				},
 			},
 		]);
+	});
+});
+
+/** SDK 18.19.0 reports each step of a watched Actions run in `details.watch` of every `run_watch` partial. */
+describe("github run watch", () => {
+	const frame = (text: string, details: unknown, toolName = "github") =>
+		({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName,
+			args: { op: "run_watch" },
+			partialResult: { content: [{ type: "text", text }], details },
+		}) as unknown as AgentSessionEvent;
+	const watching = (stepStatus: string, pollCount: number) => ({
+		repo: "o/r",
+		watch: {
+			mode: "run",
+			state: "watching",
+			repo: "o/r",
+			pollCount,
+			run: {
+				id: 7,
+				jobs: [
+					{ id: 1, name: "test", steps: [{ number: 1, name: "Run tests", status: stepStatus }] },
+				],
+			},
+		},
+	});
+	const snapshot = (stepStatus: string): WireGithubWatch => ({
+		mode: "run",
+		state: "watching",
+		repo: "o/r",
+		run: {
+			id: 7,
+			jobs: [
+				{ id: 1, name: "test", steps: [{ number: 1, name: "Run tests", status: stepStatus }] },
+			],
+		},
+	});
+
+	test("an update carries the whole snapshot when it changed, and nothing while only the poll counter moved", () => {
+		const handle = "watch-forward";
+		expect(toWireEvent(handle, frame("polling", watching("in_progress", 1)))).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "github",
+			output: "polling",
+			watch: snapshot("in_progress"),
+		});
+		expect(toWireEvent(handle, frame("polling", watching("in_progress", 2)))).toBeNull();
+		// Only the step moved: an empty append with the whole snapshot.
+		expect(toWireEvent(handle, frame("polling", watching("completed", 3)))).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "github",
+			output: "",
+			append: true,
+			watch: snapshot("completed"),
+		});
+		// A partial without a watch keeps what the browsers hold; another tool's details never ship.
+		expect(toWireEvent(handle, frame("polling", {}))).toBeNull();
+		expect(
+			toWireEvent("watch-other-tool", frame("", watching("in_progress", 1), "bash")),
+		).toBeNull();
+	});
+
+	test("a late joiner is primed with the snapshot, and a resync resends it", async () => {
+		const entry = { handle: "watch-prime" } as SessionEntry;
+		toWireEvent(entry.handle, frame("polling", watching("in_progress", 1)));
+		expect(streamingPrimeFrames(entry)).toEqual([
+			{
+				type: "event",
+				event: {
+					type: "tool_execution_update",
+					toolCallId: "c1",
+					toolName: "github",
+					output: "polling",
+					watch: snapshot("in_progress"),
+				},
+			},
+		]);
+		await broadcastHistory(entry.handle, []);
+		expect(toWireEvent(entry.handle, frame("polling", watching("in_progress", 2)))).toEqual({
+			type: "tool_execution_update",
+			toolCallId: "c1",
+			toolName: "github",
+			output: "polling",
+			watch: snapshot("in_progress"),
+		});
+	});
+
+	test("the settled result keeps its details, watch included", () => {
+		const ended = {
+			type: "tool_execution_end",
+			toolCallId: "c1",
+			toolName: "github",
+			result: { content: [{ type: "text", text: "ok" }], details: watching("completed", 4) },
+		} as unknown as AgentSessionEvent;
+		expect(toWireEvent("watch-end", ended) as unknown).toBe(ended);
 	});
 });
 

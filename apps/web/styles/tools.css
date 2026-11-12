@@ -193,6 +193,28 @@
 .task-tool > .subagent-tree {
 	margin: 0 var(--space-4) var(--space-4);
 }
+/* The planned steps of a `task.steps` spawn: a numbered list above the agent rows (one block per batch item). */
+.task-plan {
+	padding: var(--space-2) var(--space-5) var(--space-3);
+}
+.task-plan-name {
+	color: var(--muted-3);
+	font-weight: 600;
+	margin-bottom: var(--space-1);
+}
+.task-plan-steps {
+	margin: 0;
+	padding-left: var(--space-7);
+}
+.task-plan-step {
+	padding: 1px 0;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+.task-plan-step::marker {
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
 /* Card border by status (the existing 1px .card border, recolored). */
 .tool-card[data-status="done"] {
 	border-color: var(--success-border);
@@ -1304,5 +1326,208 @@ pre.terminal.wait-job-output {
 		min-height: 44px;
 		display: inline-flex;
 		align-items: center;
+	}
+}
+
+/* GithubToolCard: an Actions run watch as runs, jobs and ordered steps. */
+.gh-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+	padding: var(--space-3) var(--space-5) var(--space-4);
+	font-size: var(--fs-sm);
+}
+.gh-note,
+.gh-waiting {
+	color: var(--muted-2);
+}
+.gh-summary {
+	flex-shrink: 0;
+	font-family: var(--font-mono);
+	font-size: var(--fs-sm);
+	color: var(--muted-2);
+	white-space: nowrap;
+}
+.gh-summary[data-state="running"] {
+	color: var(--accent);
+}
+.gh-summary[data-state="success"] {
+	color: var(--success);
+}
+.gh-summary[data-state="failure"] {
+	color: var(--error);
+}
+.gh-summary[data-state="cancelled"] {
+	color: var(--warning);
+}
+.gh-state {
+	display: inline-flex;
+	flex: none;
+	color: var(--muted-2);
+}
+.gh-state[data-state="running"] {
+	color: var(--accent);
+}
+.gh-state[data-state="success"] {
+	color: var(--success);
+}
+.gh-state[data-state="failure"] {
+	color: var(--error);
+}
+.gh-state[data-state="cancelled"] {
+	color: var(--warning);
+}
+.gh-run {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	min-width: 0;
+}
+.gh-run-line,
+.gh-job-line {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	min-width: 0;
+}
+.gh-run-name {
+	min-width: 0;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+a.gh-run-name {
+	color: var(--accent);
+}
+.gh-run-meta {
+	flex: none;
+	font-family: var(--font-mono);
+	color: var(--muted-2);
+}
+.gh-jobs,
+.gh-steps {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+.gh-jobs {
+	display: grid;
+	gap: 1px;
+	padding-left: var(--space-5);
+}
+.gh-job-details > summary {
+	list-style: none;
+	cursor: pointer;
+}
+.gh-job-details > summary::-webkit-details-marker,
+.gh-log > summary::-webkit-details-marker {
+	display: none;
+}
+.gh-job-line {
+	min-height: 24px;
+}
+.gh-chevron {
+	flex: none;
+	color: var(--muted-2);
+	transition: transform var(--dur-move-fast) var(--ease-out);
+}
+details[open] > summary > .gh-chevron {
+	transform: rotate(90deg);
+}
+.gh-job-name {
+	flex: 0 1 auto;
+	min-width: 0;
+	font-family: var(--font-mono);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.gh-job[data-state="failure"] > .gh-job-line .gh-job-name,
+.gh-job[data-state="failure"] > .gh-job-details > summary .gh-job-name {
+	color: var(--error);
+	font-weight: 600;
+}
+.gh-job-note {
+	flex: 1 1 0;
+	min-width: 0;
+	color: var(--muted-2);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.gh-job[data-state="failure"] .gh-job-note {
+	color: var(--error-text);
+}
+.gh-duration {
+	flex: none;
+	margin-left: auto;
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+	color: var(--muted-3);
+}
+.gh-steps {
+	display: grid;
+	gap: 1px;
+	padding: var(--space-2) 0 var(--space-3) var(--space-7);
+}
+.gh-step {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	min-width: 0;
+	padding: 0 var(--space-3);
+	border-radius: var(--r-md);
+	color: var(--muted-3);
+}
+.gh-step[data-state="queued"],
+.gh-step[data-state="skipped"],
+.gh-step[data-state="unknown"] {
+	color: var(--muted-2);
+}
+/* A failed step stands out: tinted row, error text. */
+.gh-step[data-state="failure"] {
+	background: var(--error-bg);
+	color: var(--error-text);
+	font-weight: 600;
+}
+.gh-step[data-state="running"] {
+	color: var(--text);
+}
+.gh-step-number {
+	flex: none;
+	font-family: var(--font-mono);
+	color: var(--muted-2);
+}
+.gh-step-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.gh-logs {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+.gh-log-summary {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	min-height: 24px;
+	list-style: none;
+	cursor: pointer;
+}
+.gh-log-tail {
+	margin: var(--space-2) 0 0;
+	max-height: 24rem;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+@media (pointer: coarse) {
+	.gh-job-details > summary,
+	.gh-log-summary {
+		min-height: 44px;
 	}
 }

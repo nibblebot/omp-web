@@ -1389,6 +1389,70 @@ export interface WireAsyncFrame {
 	exitCode?: number;
 }
 
+/** One step of a watched GitHub Actions job (the SDK's `GhRunWatchStepDetails`). Statuses and conclusions are GitHub's own strings. */
+export interface WireGithubStep {
+	number: number;
+	name: string;
+	status?: string;
+	conclusion?: string;
+	/** Seconds the step ran when the SDK cut the snapshot; a running step's is the time so far at that moment. */
+	durationSeconds?: number;
+}
+
+/** One job of a watched GitHub Actions run (the SDK's `GhRunWatchJobDetails`). */
+export interface WireGithubJob {
+	id: number;
+	name: string;
+	status?: string;
+	conclusion?: string;
+	durationSeconds?: number;
+	url?: string;
+	/** In GitHub's order; absent when the API reported none for the job. */
+	steps?: WireGithubStep[];
+}
+
+/** One workflow run of a watch (the SDK's `GhRunWatchRunDetails`). */
+export interface WireGithubRun {
+	id: number;
+	workflowName?: string;
+	displayTitle?: string;
+	status?: string;
+	conclusion?: string;
+	branch?: string;
+	headSha?: string;
+	url?: string;
+	jobs: WireGithubJob[];
+}
+
+/** The captured log tail of a failed job (the SDK's `GhRunWatchFailedLogDetails`); present on the settled result. */
+export interface WireGithubFailedLog {
+	runId: number;
+	workflowName?: string;
+	jobName: string;
+	conclusion?: string;
+	tail?: string;
+	available: boolean;
+	unavailableReason?: string;
+}
+
+/**
+ * The `details.watch` of a `github` `run_watch` call (the SDK's `GhRunWatchViewDetails`, without its
+ * poll counter): one run (`mode: "run"`) or every run of a commit (`mode: "commit"`). Bounded by
+ * `slimGithubWatch` (lib/wire/github-watch.ts); the session cuts it for each running update and the
+ * web reads the settled `details` through the same cut.
+ */
+export interface WireGithubWatch {
+	mode: "run" | "commit";
+	state: "watching" | "completed";
+	repo: string;
+	branch?: string;
+	headSha?: string;
+	note?: string;
+	run?: WireGithubRun;
+	runs?: WireGithubRun[];
+	failedLogs?: WireGithubFailedLog[];
+}
+
 /**
  * `tool_execution_update` as it crosses the wire: what a running tool's card
  * shows, not the SDK's partial result. The SDK repeats the whole accumulated
@@ -1429,6 +1493,13 @@ export interface WireToolExecutionUpdate {
 	 * carries `output: ""` with `append`. A late joiner is primed with the last one sent.
 	 */
 	replies?: string[];
+	/**
+	 * The Actions run watch of a `github` call so far (`details.watch` of a `run_watch` partial,
+	 * see `WireGithubWatch`): the run's jobs and their steps. Always the whole snapshot, replacing
+	 * the card's; omitted while unchanged. An update whose only news is a new snapshot carries
+	 * `output: ""` with `append`. A late joiner is primed with the last one sent.
+	 */
+	watch?: WireGithubWatch;
 }
 
 /** `turn_end` as it crosses the wire: a bare marker (the assistant message and tool results already went out as their own events). */

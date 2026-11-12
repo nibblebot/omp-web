@@ -1616,14 +1616,51 @@ export const taskFileTool: ToolItem = tool(
 	{ taskFile: "local://tasks/audit-css.md" },
 	"",
 );
-/** TaskToolCard: a `task.steps` call (SDK 18.19.0+), labelled by its first step. */
+/** TaskToolCard: a `task.steps` call (SDK 18.19.0+), labelled by its first step; the card lists all three steps in order. */
 export const taskStepsTool: ToolItem = tool(
 	"task",
 	"running",
 	{
 		agent: "task",
-		steps: ["List the selectors no component uses", "Delete them and rebuild the web bundle"],
+		steps: [
+			"List the selectors no component uses",
+			"Delete them and rebuild the web bundle",
+			"Report how many rules were removed and the bundle size change",
+		],
 		solutionSpace: "one fix: delete dead selectors",
+	},
+	"",
+);
+/** TaskToolCard: a batch call whose items mix a `steps` spawn, a plain `task` spawn and a named `steps` spawn. */
+export const taskBatchStepsTool: ToolItem = tool(
+	"task",
+	"running",
+	{
+		context: "Dead CSS cleanup for apps/web/styles.",
+		tasks: [
+			{
+				agent: "task",
+				steps: ["Find selectors no component uses", "Delete them and rebuild the web bundle"],
+				solutionSpace: "one fix: delete dead selectors",
+			},
+			{
+				agent: "scout",
+				task: "Map which stylesheets each feature imports",
+				solutionSpace: "read-only survey",
+			},
+			{
+				name: "Tokens",
+				agent: "task",
+				steps: [
+					"List hard-coded colors in the stylesheets",
+					"Replace each with the nearest design token",
+					"Run the lint check and fix what it reports",
+					"Rebuild the web bundle",
+					"Summarise the tokens introduced",
+				],
+				solutionSpace: "token substitution, mapping open",
+			},
+		],
 	},
 	"",
 );
@@ -1663,6 +1700,34 @@ export const taskSubagents: SubagentInfo[] = [
 	sub(taskDoneTool, 1, "Eli", "scout", "Read the chat store", "completed", 118_000),
 	sub(taskErrorTool, 0, "Ines", "task", "Move annotations to anchor groups", "failed", 30_000),
 ];
+/** SubagentInfo list of the steps fixtures: one agent for the single spawn, one per batch item. */
+export const taskStepsSubagents: SubagentInfo[] = [
+	sub(taskStepsTool, 0, "Hana", "task", "List the selectors no component uses", "running", 5_000),
+	sub(taskBatchStepsTool, 0, "Ivo", "task", "Find selectors no component uses", "running", 6_000),
+	sub(
+		taskBatchStepsTool,
+		1,
+		"Juno",
+		"scout",
+		"Map which stylesheets each feature imports",
+		"completed",
+		40_000,
+	),
+	sub(
+		taskBatchStepsTool,
+		2,
+		"Kit",
+		"task",
+		"List hard-coded colors in the stylesheets",
+		"running",
+		8_000,
+	),
+];
+
+/** state.subagents patch for the steps stories. */
+export const taskStepsSubagentMap: typeof state.subagents = new Map(
+	taskStepsSubagents.map((info) => [info.id, info]),
+);
 
 /** state.subagents patch: the Map TaskToolCard filters by parentToolCallId. */
 export const taskSubagentMap: typeof state.subagents = new Map(

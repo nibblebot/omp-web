@@ -18,9 +18,11 @@ import {
 	type ServerFrame,
 	type SessionScopedFrame,
 	type WireAsyncFrame,
+	type WireGithubWatch,
 	type WireSessionEvent,
 	type WireToolLive,
 } from "#lib/wire/protocol";
+import { sameGithubWatch, slimGithubWatch } from "#lib/wire/github-watch";
 import { ReplayRing } from "#lib/wire/replay-ring";
 import {
 	sameAsyncFrame,
@@ -458,6 +460,8 @@ interface ToolProgress {
 	async: WireAsyncFrame | undefined;
 	/** Last `out://` reply list sent (bash and eval calls); a partial without one keeps it. */
 	replies: string[] | undefined;
+	/** Last Actions run watch sent (a `github` `run_watch` partial's `details.watch`); a partial without one keeps it. */
+	watch: WireGithubWatch | undefined;
 	/** Latest `details.trace` of a bash partial (the SDK's own snapshot object, never sent): the source of the shell visualization of a call still running. */
 	trace: unknown;
 }
@@ -487,7 +491,8 @@ export function streamingPrimeFrames(
 			progress.images.length === 0 &&
 			progress.live === undefined &&
 			progress.async === undefined &&
-			progress.replies === undefined
+			progress.replies === undefined &&
+			progress.watch === undefined
 		)
 			continue;
 		frames.push({
@@ -502,6 +507,7 @@ export function streamingPrimeFrames(
 				...(progress.live !== undefined ? { live: progress.live } : {}),
 				...(progress.async !== undefined ? { async: progress.async } : {}),
 				...(progress.replies !== undefined ? { replies: progress.replies } : {}),
+				...(progress.watch !== undefined ? { watch: progress.watch } : {}),
 			},
 		});
 	}
@@ -521,7 +527,8 @@ function sameImages(a: readonly ImageArg[], b: readonly ImageArg[]): boolean {
  * other way, nothing (null) when it changes nothing the card shows. An eval or
  * wait partial's live status (see `toolLiveOf`) rides along when it changed,
  * and so does the job frame of a backgrounded call (see `slimAsyncFrame`) and
- * the `out://` replies of a bash or eval call (see `toolReplies`);
+ * the `out://` replies of a bash or eval call (see `toolReplies`) and the Actions
+ * run watch of a `github` call (see `slimGithubWatch`);
  * an update with no other news then carries an empty append. A call returns
  * while its background job keeps reporting, so these updates arrive after
  * `tool_execution_end`; a job's terminal frame is its last, and ends its entry.
@@ -548,6 +555,9 @@ function toolUpdateFrame(
 	const repliesChanged =
 		partialReplies !== undefined &&
 		(sent?.resync === true || !sameReplies(partialReplies, sent?.replies));
+	const watch = slimGithubWatch(event.toolName, event.partialResult?.details);
+	const watchChanged =
+		watch !== undefined && (sent?.resync === true || !sameGithubWatch(watch, sent?.watch));
 	// A task call mixing blocking and background spawns can report a settled job before its
 	// tool_execution_end; its later updates then go out as snapshots and it is not primed until the end.
 	// Harmless: the web handles an early terminal frame.
@@ -561,6 +571,7 @@ function toolUpdateFrame(
 			live: live ?? sent?.live,
 			async: job ?? sent?.async,
 			replies: partialReplies ?? sent?.replies,
+			watch: watch ?? sent?.watch,
 			trace:
 				event.toolName === "bash"
 					? (partialTrace(event.partialResult?.details) ?? sent?.trace)
@@ -571,7 +582,8 @@ function toolUpdateFrame(
 		images === undefined &&
 		!liveChanged &&
 		!asyncChanged &&
-		!repliesChanged
+		!repliesChanged &&
+		!watchChanged
 	)
 		return null;
 	const metaOnly = output === previous && images === undefined;
@@ -592,6 +604,7 @@ function toolUpdateFrame(
 		...(liveChanged ? { live } : {}),
 		...(asyncChanged ? { async: job } : {}),
 		...(repliesChanged ? { replies: partialReplies } : {}),
+		...(watchChanged ? { watch } : {}),
 	};
 }
 
@@ -609,7 +622,8 @@ function toolUpdateFrame(
  *   the SDK repeats the whole output and args in each. An eval or wait partial's
  *   `details` never ship whole: only their slim `live` status (lib/wire/tool-live.ts),
  *   and only when it changed; a bash or eval call's `details.replies` ride along whole when they
- *   changed. A backgrounded bash, eval or task call keeps sending
+ *   changed, and a `github` run watch's `details.watch` rides along bounded (lib/wire/github-watch.ts)
+ *   when it changed. A backgrounded bash, eval or task call keeps sending
  *   updates after `tool_execution_end`; each carries the job's `async` frame
  *   (state, exit code) when that changed, the last one ending the call's entry.
  * - Tool-result `message_start`/`message_end` are dropped: `tool_execution_end`

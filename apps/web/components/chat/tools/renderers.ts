@@ -4,6 +4,7 @@ import { AskToolCard } from "./AskToolCard";
 import { BashToolCard } from "./BashToolCard";
 import { DiffToolCard } from "./DiffToolCard";
 import { EvalToolCard } from "./EvalToolCard";
+import { GithubToolCard } from "./GithubToolCard";
 import { LazyFindToolCard } from "./LazyFindToolCard";
 import { LspToolCard } from "./LspToolCard";
 import { ReadToolCard } from "./ReadToolCard";
@@ -27,5 +28,6 @@ export const RENDERERS: Record<string, Component<{ item: ToolItem }>> = {
 	task: TaskToolCard,
 	eval: EvalToolCard,
 	lsp: LspToolCard,
+	github: GithubToolCard,
 	ask: AskToolCard,
 };

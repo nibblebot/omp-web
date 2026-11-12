@@ -38,6 +38,7 @@ import type {
 	ServerFrame,
 	SettingsModel,
 	WebSessionState,
+	WireGithubWatch,
 	WireToolLive,
 } from "#lib/wire/protocol";
 import {
@@ -214,6 +215,8 @@ export type ChatItem =
 			live?: WireToolLive & { at: number };
 			/** `out://` replies a running bash/eval call has written so far (frame `replies`), oldest first; a settled call's come from `details.replies` (chat/tool-replies.ts). */
 			replies?: string[];
+			/** Actions run watch a `github` call reported last (frame `watch`): the running card's, and the settled card's when the call ended with no `details.watch` (an aborted watch). A settled call otherwise reads `details.watch` (chat/github-watch.ts). */
+			watch?: WireGithubWatch;
 			/** The background job a returned bash/eval/task call stays parked on (chat/background-job.ts); absent for every other call. */
 			background?: BackgroundJob;
 	  }
