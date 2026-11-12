@@ -11,7 +11,8 @@ export default defineStory({
 	variants: [
 		{
 			name: "Loaded limits",
-			// Two minutes into the five-minute countdown: the ring is three fifths full.
+			// Two minutes into the five-minute countdown: the ring is three fifths full. The LiteLLM account's
+			// uncapped user budget shows its dollar amount where a capped limit draws its bar.
 			seed: () =>
 				seedRosterFleet({
 					usageReports: rosterUsageReports,

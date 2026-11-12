@@ -306,12 +306,21 @@
 	background: var(--text);
 	opacity: 0.35;
 }
+/* Time left in a limit's window; also the amount an uncapped limit shows in
+   place of its bar ("$3.20"), so it reads as status rather than a meter. */
+.sidebar-usage-amount,
 .sidebar-usage-reset {
 	color: var(--muted);
 	line-height: var(--usage-row);
 	text-align: right;
 	white-space: nowrap;
 	font-variant-numeric: tabular-nums;
+}
+/* Clipped across only: like the reset label, the text overhangs its 6px row. */
+.sidebar-usage-amount {
+	overflow-x: clip;
+	text-overflow: ellipsis;
+	text-align: left;
 }
 .sidebar-row {
 	display: flex;

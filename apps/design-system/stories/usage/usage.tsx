@@ -81,7 +81,8 @@ export default [
 		variants: [
 			{
 				name: "Provider windows",
-				description: "Rate-limit windows per provider with reset times.",
+				description:
+					"Rate-limit windows per provider with reset times, and a LiteLLM gateway's USD key and user budgets (the user budget has no cap, so no bar).",
 				seed: () => answerRoutes({ "GET /ctl/usage": () => rosterUsageReports }),
 				render: (ctx) => <UsageLimitsDialog onClose={ctx.close} />,
 			},

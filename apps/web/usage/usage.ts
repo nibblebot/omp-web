@@ -80,17 +80,43 @@ export function formatAmount(n: number | undefined): string {
 	return n.toLocaleString("en-US");
 }
 
+// Dollars with two decimals and grouping ("$1,234.50"), sub-cent amounts rounded to the cent. Built on
+// first use, once, like the turn-stamp formatters below.
+let usdFormat: Intl.NumberFormat | undefined;
+
 /**
  * Unit-aware UsageAmount rendering: tokens use the compact k/M formatter,
- * percents append "%", everything else is locale-grouped ("1,250 / 5,000").
- * Missing values render as a dash so limits without amounts stay readable.
+ * percents append "%", usd reads as dollars ("$12.35 / $100.00"), everything
+ * else is locale-grouped ("1,250 / 5,000"). Missing values render as a dash
+ * so limits without amounts stay readable.
  */
 export function formatUnitAmount(amount: { used?: number; limit?: number; unit: string }): string {
 	const v = (n: number | undefined) =>
-		n === undefined ? "-" : amount.unit === "tokens" ? formatTokens(n) : formatAmount(n);
+		n === undefined || !Number.isFinite(n)
+			? "-"
+			: amount.unit === "tokens"
+				? formatTokens(n)
+				: amount.unit === "usd"
+					? (usdFormat ??= new Intl.NumberFormat("en-US", {
+							style: "currency",
+							currency: "USD",
+						})).format(n)
+					: formatAmount(n);
 	const used = v(amount.used);
 	const suffix = amount.unit === "percent" && amount.used !== undefined ? "%" : "";
 	return amount.limit !== undefined ? `${used} / ${v(amount.limit)}${suffix}` : `${used}${suffix}`;
+}
+
+/**
+ * Percent of a limit used, clamped to 0..100, for drawing its bar; undefined
+ * when the report gives no usable ratio (an uncapped budget), which draws no
+ * bar rather than an empty one.
+ */
+export function resolveUsedPercent(limit: UsageLimit): number | undefined {
+	const frac = resolveUsedFraction(limit);
+	return frac === undefined || !Number.isFinite(frac)
+		? undefined
+		: Math.max(0, Math.min(100, frac * 100));
 }
 
 /**

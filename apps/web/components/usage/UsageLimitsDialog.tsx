@@ -1,6 +1,6 @@
 import { For, onMount, Show, type Component } from "solid-js";
 import type { UsageLimit } from "@oh-my-pi/pi-ai";
-import { formatUnitAmount, resolveUsedFraction } from "../../usage/usage";
+import { formatUnitAmount, resolveUsedPercent } from "../../usage/usage";
 import { refreshUsageReports, state } from "../../state";
 import { Modal } from "../ui/Modal";
 
@@ -8,10 +8,7 @@ import { Modal } from "../ui/Modal";
 const LimitRow: Component<{ limit: UsageLimit }> = (props) => {
 	const limit = () => props.limit;
 	const w = () => limit().window;
-	const pct = () => {
-		const frac = resolveUsedFraction(limit());
-		return frac === undefined ? undefined : Math.min(100, frac * 100);
-	};
+	const pct = () => resolveUsedPercent(limit());
 	return (
 		<div class="usage-limit">
 			<div class="usage-limit-head">

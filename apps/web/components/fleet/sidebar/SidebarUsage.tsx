@@ -5,8 +5,9 @@ import { isPageVisible } from "../../../page-visibility";
 import { refreshUsageReports, state, USAGE_AUTO_REFRESH_MS } from "../../../state";
 import {
 	formatTimeRemaining,
+	formatUnitAmount,
 	resolveElapsedFraction,
-	resolveUsedFraction,
+	resolveUsedPercent,
 	usageAccountTitle,
 	usageBrand,
 	usageLimitTitle,
@@ -38,29 +39,42 @@ const BRAND_LOGOS: Record<UsageBrand, Component<IconProps>> = {
  * One limit: utilization bar, then time left in its window. Label and percent
  * live in the tooltip. A thin red tick marks how far through the window we
  * are, so usage reads against elapsed time (fill past the tick: ahead of pace).
+ * A limit with no usable ratio (an uncapped budget) shows its amount in the
+ * bar's place instead of an empty bar.
  */
 const UsageBar: Component<{ limit: UsageLimit; now: number }> = (props) => {
-	const pct = () => {
-		const frac = resolveUsedFraction(props.limit);
-		return frac === undefined ? 0 : Math.max(0, Math.min(100, frac * 100));
-	};
+	const pct = () => resolveUsedPercent(props.limit);
 	const elapsed = () => resolveElapsedFraction(props.limit, props.now);
+	const showTitle = (e: MouseEvent) => {
+		e.stopPropagation();
+		showTouchHint(usageLimitTitle(props.limit));
+	};
 	return (
 		<>
-			<div
-				class="sidebar-usage-bar"
-				data-status={props.limit.status}
-				title={usageLimitTitle(props.limit)}
-				onClick={(e) => {
-					e.stopPropagation();
-					showTouchHint(usageLimitTitle(props.limit));
-				}}
+			<Show
+				when={pct() !== undefined}
+				fallback={
+					<span
+						class="sidebar-usage-amount"
+						title={usageLimitTitle(props.limit)}
+						onClick={showTitle}
+					>
+						{formatUnitAmount(props.limit.amount)}
+					</span>
+				}
 			>
-				<div class="sidebar-usage-bar-fill" style={{ width: `${pct()}%` }} />
-				<Show when={elapsed() !== undefined}>
-					<div class="sidebar-usage-bar-elapsed" style={{ left: `${elapsed()! * 100}%` }} />
-				</Show>
-			</div>
+				<div
+					class="sidebar-usage-bar"
+					data-status={props.limit.status}
+					title={usageLimitTitle(props.limit)}
+					onClick={showTitle}
+				>
+					<div class="sidebar-usage-bar-fill" style={{ width: `${pct()}%` }} />
+					<Show when={elapsed() !== undefined}>
+						<div class="sidebar-usage-bar-elapsed" style={{ left: `${elapsed()! * 100}%` }} />
+					</Show>
+				</div>
+			</Show>
 			<span class="sidebar-usage-reset">
 				<Show when={props.limit.window?.resetsAt}>
 					{(resetsAt) => formatTimeRemaining(resetsAt(), props.now)}
@@ -75,7 +89,8 @@ const UsageBar: Component<{ limit: UsageLimit; now: number }> = (props) => {
  * parity), docked at the bottom of the sidebar when the "usage in sidebar"
  * setting is on. Each provider account (one UsageReport) is a provider logo,
  * one size for every account (a three-bar stack tall), beside its stack of
- * limit bars, each bar followed by the time left in its window. Limit labels,
+ * limit bars, each bar followed by the time left in its window (a limit with
+ * no cap, such as an uncapped USD budget, shows its amount instead of a bar). Limit labels,
  * percentages, and reset timestamps are hover text, shown as a toast on a tap
  * (bar: that limit; logo or account: the account);
  * warning and exhausted limits tint their bar. Shares the modal's GET

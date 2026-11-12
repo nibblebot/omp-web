@@ -583,7 +583,12 @@ export const rosterProviderProfiles: PublicProviderProfile[] = [
 /** Reset times count from page load, so the sidebar's time-left labels read as live countdowns. */
 const USAGE_NOW = Date.now();
 
-/** UsageReport list: one Anthropic, OpenAI Codex, and OpenCode Go account each, with a warning and an exhausted window. */
+/**
+ * UsageReport list: one Anthropic, OpenAI Codex, and OpenCode Go account each, with a warning and an exhausted
+ * window, plus a LiteLLM gateway's USD budgets as its usage adapter reports them: a capped key budget with a
+ * `budget_duration` window (no `durationMs`, so no elapsed tick) and an uncapped user budget (spend only, no
+ * window, status unknown).
+ */
 export const rosterUsageReports: UsageReport[] = [
 	{
 		provider: "anthropic",
@@ -694,6 +699,39 @@ export const rosterUsageReports: UsageReport[] = [
 				status: "ok",
 			},
 		],
+	},
+	{
+		provider: "litellm",
+		fetchedAt: USAGE_NOW,
+		limits: [
+			{
+				id: "litellm:key:budget",
+				label: "Key budget",
+				scope: { provider: "litellm", shared: true, windowId: "30d" },
+				window: { id: "30d", label: "30d", resetsAt: USAGE_NOW + 12 * DAY + 6 * 60 * MIN },
+				amount: {
+					unit: "usd",
+					used: 12.3456,
+					limit: 100,
+					remaining: 87.6544,
+					usedFraction: 0.123456,
+					remainingFraction: 0.876544,
+				},
+				status: "ok",
+			},
+			{
+				id: "litellm:user:budget",
+				label: "User budget",
+				scope: { provider: "litellm", shared: true },
+				amount: { unit: "usd", used: 3.2 },
+				status: "unknown",
+			},
+		],
+		metadata: {
+			endpoint: "https://llm.example.com",
+			accountId: "joshua",
+			email: "joshua@example.com",
+		},
 	},
 ];
 

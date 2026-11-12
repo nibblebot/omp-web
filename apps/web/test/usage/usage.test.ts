@@ -10,6 +10,7 @@ import {
 	formatUsageRow,
 	formatTimeRemaining,
 	resolveElapsedFraction,
+	resolveUsedPercent,
 	usageBrand,
 	type UsageLike,
 } from "../../usage/usage";
@@ -108,7 +109,43 @@ describe("formatUnitAmount", () => {
 
 	test("missing values render as a dash", () => {
 		expect(formatUnitAmount({ unit: "tokens" })).toBe("-");
-		expect(formatUnitAmount({ used: 10, unit: "usd" })).toBe("10");
+		expect(formatUnitAmount({ limit: 100, unit: "usd" })).toBe("- / $100.00");
+	});
+
+	test("usd reads as dollars with two decimals, capped and uncapped", () => {
+		expect(formatUnitAmount({ used: 12.3456, limit: 100, unit: "usd" })).toBe("$12.35 / $100.00");
+		expect(formatUnitAmount({ used: 10, unit: "usd" })).toBe("$10.00");
+		expect(formatUnitAmount({ used: 1234.5, limit: 5000, unit: "usd" })).toBe(
+			"$1,234.50 / $5,000.00",
+		);
+	});
+
+	test("usd rounds sub-cent spend to the cent", () => {
+		expect(formatUnitAmount({ used: 0.004, unit: "usd" })).toBe("$0.00");
+		expect(formatUnitAmount({ used: 0.0051, limit: 0.5, unit: "usd" })).toBe("$0.01 / $0.50");
+	});
+});
+
+describe("resolveUsedPercent", () => {
+	const budget = (amount: UsageLimit["amount"]): UsageLimit => ({
+		id: "litellm:key:budget",
+		label: "Key budget",
+		scope: { provider: "litellm", shared: true },
+		amount,
+	});
+
+	test("an uncapped budget has no bar", () => {
+		expect(resolveUsedPercent(budget({ used: 3.2, unit: "usd" }))).toBeUndefined();
+	});
+
+	test("a capped budget fills to its share, clamped to 0..100", () => {
+		expect(resolveUsedPercent(budget({ used: 25, limit: 100, unit: "usd" }))).toBe(25);
+		expect(resolveUsedPercent(budget({ used: 0, limit: 100, unit: "usd" }))).toBe(0);
+		expect(resolveUsedPercent(budget({ used: 140, limit: 100, unit: "usd" }))).toBe(100);
+		// A zero cap blocks every request; the adapter reports it as fully used.
+		expect(resolveUsedPercent(budget({ used: 0, limit: 0, usedFraction: 1, unit: "usd" }))).toBe(
+			100,
+		);
 	});
 });
 
