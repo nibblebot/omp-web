@@ -222,13 +222,13 @@ function layerValue(layer: unknown, path: string): unknown {
  * `live`: a running session picks the edit up through a settings listener, a tool-gate
  * reconcile, or a read at use time (lib/sdk-settings/test/live-setting-trace.ts holds the
  * per-row evidence; the exhaustiveness test keeps both lists complete). Evidence paths
- * are relative to @oh-my-pi/pi-coding-agent 18.18.9 `src/`.
+ * are relative to @oh-my-pi/pi-coding-agent 18.19.0 `src/`.
  */
 export const NEXT_SESSION_PATHS: Readonly<Record<string, true>> = {
-	// Seeds a new session's level (sdk.ts:2344 pickInitialThinkingLevel, agent-session.ts:14266
-	// on session switch); agent-session.ts:3246-3249 states it is deliberately not listened to.
+	// Seeds a new session's level (sdk.ts:2339 pickInitialThinkingLevel, agent-session.ts:14301
+	// on session switch); agent-session.ts:3265-3268 states it is deliberately not listened to.
 	defaultThinkingLevel: true,
-	// Read once into mcpDiscoverOptions (sdk.ts:2871) at construction; no listener, and
+	// Read once into mcpDiscoverOptions (sdk.ts:2866) at construction; no listener, and
 	// MCP reconnects reuse that captured option (mcp/manager.ts:807,869).
 	"mcp.startupTimeoutMs": true,
 	// Read by startup/new-session discovery only (discovery/custom-context-files.ts:36); the
@@ -242,7 +242,7 @@ export const NEXT_SESSION_PATHS: Readonly<Record<string, true>> = {
 	"collab.autoStart": true,
 	// Telemetry export is initialised once at process startup (main.ts:2431); no listener.
 	"telemetry.otlpExportEnabled": true,
-	// The Spotlight experiment starts once while the session is built (sdk.ts:2767-2769,
+	// The Spotlight experiment starts once while the session is built (sdk.ts:2762-2764,
 	// spotlight/session.ts:204); no listener.
 	"spotlight.experiment.enabled": true,
 };

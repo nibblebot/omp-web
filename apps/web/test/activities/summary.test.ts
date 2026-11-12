@@ -168,7 +168,7 @@ describe("todosSummary", () => {
 	test("completed and abandoned count as done across phases", () => {
 		setState(
 			"todoPhases",
-			phases(["completed", "in_progress", "pending"], ["abandoned", "blocked"]),
+			phases(["completed", "in_progress", "pending"], ["abandoned", "pending"]),
 		);
 		expect(todosSummary()).toEqual({ total: 5, done: 2, settled: false });
 	});

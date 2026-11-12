@@ -13,7 +13,7 @@ export default defineStory({
 		{
 			name: "Live board",
 			description:
-				"Phase names over their tasks; completed and abandoned are struck through, the underway task spins, blocked reads as an error.",
+				"Phase names over their tasks; completed and abandoned are struck through, the underway task spins.",
 			seed: () => seedTodos(),
 			render: () => (
 				<div class="ds-frame">

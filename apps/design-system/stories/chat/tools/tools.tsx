@@ -84,6 +84,7 @@ import {
 	taskStageTool,
 	taskStatsSubagentMap,
 	taskStatsTool,
+	taskStepsTool,
 	taskSubagentMap,
 	todoArgsTool,
 	todoEmptyTool,
@@ -625,7 +626,13 @@ const stories: Story[] = [
 				render: () => <TaskToolCard item={taskPendingTool} />,
 			},
 			{
-				name: "Task file call",
+				name: "Ordered steps",
+				description:
+					"`task.steps` call: no `task` text, so the card is labelled by its first step.",
+				render: () => <TaskToolCard item={taskStepsTool} />,
+			},
+			{
+				name: "Before SDK 18.19.0: task file call",
 				description:
 					"`task.file` call: no `task` text, so the card is labelled by the `taskFile` path.",
 				render: () => <TaskToolCard item={taskFileTool} />,
@@ -666,7 +673,12 @@ const stories: Story[] = [
 		component: { file: "apps/web/components/chat/tools/TodoToolCard.tsx", export: "TodoToolCard" },
 		variants: [
 			{ name: "Phases from call args", render: () => <TodoToolCard item={todoArgsTool} /> },
-			{ name: "Flat items from call args", render: () => <TodoToolCard item={todoItemsTool} /> },
+			{
+				name: "Before SDK 18.19.0: flat items with a blocked task",
+				description:
+					"Older transcripts can record the removed `blocked` status; it keeps its own glyph.",
+				render: () => <TodoToolCard item={todoItemsTool} />,
+			},
 			{
 				name: "Settled snapshot overrides args",
 				description:

@@ -115,7 +115,7 @@ export const todoPhasesMidRun: typeof state.todoPhases = [
 		tasks: [
 			{ content: "Daemons section with log expand", status: "in_progress" },
 			{ content: "Todo section, read-only", status: "pending" },
-			{ content: "Wire the activity bar popovers", status: "blocked" },
+			{ content: "Wire the activity bar popovers", status: "pending" },
 		],
 	},
 	{

@@ -23,8 +23,6 @@ const OPERATIONS: Record<string, true> = {
 	done: true,
 	rm: true,
 	drop: true,
-	block: true,
-	unblock: true,
 	append: true,
 	view: true,
 };
@@ -71,22 +69,13 @@ function parseOps(value: unknown): ReviewTodoOp[] {
 	for (const item of value) {
 		if (!isRecord(item)) refuse("Each todo op must be an object");
 		if (item.op === "replace") {
-			if (
-				!Array.isArray(item.phases) ||
-				!item.phases.every(
-					(phase) =>
-						isTodoPhase(phase) &&
-						phase.tasks.every(
-							(task) => task.blocker === undefined || typeof task.blocker === "string",
-						),
-				)
-			)
+			if (!Array.isArray(item.phases) || !item.phases.every(isTodoPhase))
 				refuse("Replacement phases must use the canonical todo model");
 			continue;
 		}
 		if (typeof item.op !== "string" || OPERATIONS[item.op] !== true)
 			refuse("Unknown todo operation");
-		for (const field of ["task", "phase", "reason"]) {
+		for (const field of ["task", "phase"]) {
 			if (item[field] !== undefined && typeof item[field] !== "string")
 				refuse(`Todo ${field} must be a string`);
 		}

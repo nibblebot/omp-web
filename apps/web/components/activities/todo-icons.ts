@@ -8,7 +8,7 @@ import {
 	type IconProps,
 } from "../ui/icons";
 
-/** Todo task status → checkbox glyph, shared by the Todo tool card and the Activities checklist. */
+/** Todo task status → checkbox glyph, shared by the Todo tool card and the Activities checklist. `blocked` only appears in todo calls recorded before SDK 18.19.0, which removed that status. */
 export const TODO_ICON: Record<string, Component<IconProps>> = {
 	done: SquareCheckIcon,
 	completed: SquareCheckIcon,

@@ -10,7 +10,7 @@ export default defineStory({
 	variants: [
 		{
 			name: "Board",
-			description: "Phased tasks with a blocked item, a dropped item, and one selected task.",
+			description: "Phased tasks with a pending item, a dropped item, and one selected task.",
 			seed: () => answerCalls(todoCalls()),
 			render: () => (
 				<div class="ds-frame-tall">

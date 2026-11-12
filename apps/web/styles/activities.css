@@ -571,10 +571,6 @@
 	text-decoration: line-through;
 }
 
-.todo-checklist .todo-item[data-status="blocked"] .todo-text {
-	color: var(--error);
-}
-
 .todo-checklist .todo-text {
 	min-width: 0;
 	overflow-wrap: anywhere;

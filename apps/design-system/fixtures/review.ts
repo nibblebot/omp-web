@@ -207,7 +207,7 @@ export const reviewAnnotations: ReviewAnnotationDto[] = [
 	},
 ];
 
-/** TodoBoardDto: plan phases with a blocked task, a dropped task, and a selected task for TodoPanel. */
+/** TodoBoardDto: plan phases with a pending task, a dropped task, and a selected task for TodoPanel. */
 export const reviewTodoBoard: TodoBoardDto = {
 	revision: "r7",
 	selected: { phase: 1, task: 0 },
@@ -229,8 +229,8 @@ export const reviewTodoBoard: TodoBoardDto = {
 				},
 				{
 					content: "Cover the failed state",
-					status: "blocked",
-					blocker: "Waiting on the clipboard permission mock",
+					status: "pending",
+					notes: ["Needs the clipboard permission mock"],
 				},
 				{
 					content: "Port the old markdown fixture",

@@ -15,11 +15,16 @@ export const TaskToolCard: Component<{ item: ToolItem }> = (props) => {
 		const args = props.item.args as {
 			description?: string;
 			task?: string;
+			steps?: unknown;
 			taskFile?: string;
 			prompt?: string;
 		} | null;
-		// `task.file` replaces `task` with `taskFile` (a path) on a call.
-		return args?.description ?? args?.task ?? args?.taskFile ?? args?.prompt ?? "";
+		// `task.steps` replaces `task` with ordered `steps`; the first one names the call.
+		const firstStep = Array.isArray(args?.steps)
+			? args.steps.find((step) => typeof step === "string")
+			: undefined;
+		// `taskFile` (a path in place of `task`) only appears in calls recorded before SDK 18.19.0.
+		return args?.description ?? args?.task ?? firstStep ?? args?.taskFile ?? args?.prompt ?? "";
 	};
 	const order = createStableSubagentOrder();
 	// One evaluation per forest build, shared by every read below; a card whose agents did not change gets

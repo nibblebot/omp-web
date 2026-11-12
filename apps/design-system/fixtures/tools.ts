@@ -1609,11 +1609,22 @@ export const taskPendingTool: ToolItem = tool(
 	{ description: "Audit CSS for unused selectors" },
 	"",
 );
-/** TaskToolCard: `task.file` call, labelled by its `taskFile` path (no `task`/`description`). */
+/** TaskToolCard: a `task.file` call from before SDK 18.19.0, labelled by its `taskFile` path (no `task`/`description`). */
 export const taskFileTool: ToolItem = tool(
 	"task",
 	"running",
 	{ taskFile: "local://tasks/audit-css.md" },
+	"",
+);
+/** TaskToolCard: a `task.steps` call (SDK 18.19.0+), labelled by its first step. */
+export const taskStepsTool: ToolItem = tool(
+	"task",
+	"running",
+	{
+		agent: "task",
+		steps: ["List the selectors no component uses", "Delete them and rebuild the web bundle"],
+		solutionSpace: "one fix: delete dead selectors",
+	},
 	"",
 );
 
@@ -1684,7 +1695,7 @@ export const todoArgsTool: ToolItem = tool(
 	},
 	"Updated 2 phases.",
 );
-/** TodoToolCard: flat items form of the args. */
+/** TodoToolCard: flat items form of the args, with a `blocked` task (a status removed in SDK 18.19.0) as older transcripts record it. */
 export const todoItemsTool: ToolItem = tool(
 	"todo",
 	"done",
@@ -1711,7 +1722,7 @@ export const settledTodoPhases: typeof state.todoPhases = [
 				notes: ["tools.ts and chat.ts first"],
 			},
 			{ content: "Verify in the browser", status: "pending" },
-			{ content: "Wire the coverage page", status: "blocked", blocker: "waiting on SharedStories" },
+			{ content: "Wire the coverage page", status: "pending", notes: ["waiting on SharedStories"] },
 		],
 	},
 ];

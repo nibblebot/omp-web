@@ -6,7 +6,7 @@
  * calls {@link createResumeHandlers}; the fleet edge, protocol, state and web
  * prompt command table are NEVER touched here.
  *
- * SDK reuse (installed @oh-my-pi/pi-coding-agent 18.18.9; revalidate on bump):
+ * SDK reuse (installed @oh-my-pi/pi-coding-agent 18.19.0; revalidate on bump):
  * - session/session-listing.ts: `listSessionsForPicker` and
  *   `listAllSessionsForPicker` (the picker's two-pass listing: history.db-
  *   titled rows at once, then the full scan with empties dropped and pins
