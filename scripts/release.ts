@@ -32,12 +32,16 @@ export const ARTIFACT_DIR = "dist-release/";
 
 /**
  * Release gate: the exact argv lists run in order after the version is
- * picked and before anything is generated. `e2e/onboarding.ts` is the offline
- * end-to-end walk (pack, pinned install, update round-trip). The dry-run
- * plan derives its gate lines from this list, so the plan, the loop and the
- * docs scan can never disagree.
+ * picked and before anything is generated. The frozen-lockfile install comes
+ * first so every later command runs against the pinned dependencies (a stale
+ * `node_modules` after an SDK pin bump fails the suite against the wrong SDK),
+ * and it fails when `bun.lock` disagrees with `package.json`.
+ * `e2e/onboarding.ts` is the offline end-to-end walk (pack, pinned install,
+ * update round-trip). The dry-run plan derives its gate lines from this list,
+ * so the plan, the loop and the docs scan can never disagree.
  */
 export const GATE_COMMANDS: readonly (readonly string[])[] = [
+	["bun", "install", "--frozen-lockfile"],
 	["bun", "run", "check:types"],
 	["bun", "run", "format:check"],
 	["bun", "run", "build:web"],

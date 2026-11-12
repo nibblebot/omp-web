@@ -76,6 +76,7 @@ async function makeFixtureTgz(dir: string, content?: string): Promise<string> {
 describe("GATE_COMMANDS + releasePlan", () => {
 	test("gate is the exact argv lists in order, and the dry-run plan opens with them", () => {
 		expect(GATE_COMMANDS).toEqual([
+			["bun", "install", "--frozen-lockfile"],
 			["bun", "run", "check:types"],
 			["bun", "run", "format:check"],
 			["bun", "run", "build:web"],
@@ -126,7 +127,7 @@ describe("runGate", () => {
 	test("stops at the first failing command with its exit code and stderr", async () => {
 		const { runner, calls } = fakeRunner(2);
 		await expect(runGate(false, runner)).rejects.toThrow(
-			["gate failed: bun run format:check (exit 2)", "boom"].join("\n"),
+			["gate failed: bun run check:types (exit 2)", "boom"].join("\n"),
 		);
 		// The remaining commands never run: a failed gate aborts the release.
 		expect(calls).toEqual(GATE_COMMANDS.slice(0, 2).map((cmd) => [...cmd]));

@@ -174,7 +174,7 @@ Update wire contracts, producers, consumers, dispatch classification, and behavi
 - CLI/distribution/bundle/first-run: `bun e2e/onboarding.ts`.
 - Transport/wire changes (`lib/wire/`, `apps/fleet/{edge,fleet-websocket,ui-server,session-transport}.ts`, `apps/session/{client-delivery,fleet-callback,session-control}.ts`): record a baseline of `main` on your host (`--save-baseline`), then from the branch run `bun run profile --quick --compare .profile-out/baselines/<name>.json` and read the deltas; they are advisory (the command always exits 0 on compare), but a failing liveness check or a regression outside the noise band needs an explanation. Do not compare runs made with `--cpuprofile`/`--heap`, different pinning, or different hosts. Baselines stay local; record conclusions worth keeping as prose in `scripts/profile/results/`.
 - Docs: check paths/links.
-- Release: `GATE_COMMANDS` in `scripts/release.ts` is authoritative; includes types, format, web build, full tests, onboarding, followed by packed-artifact installation smoke. Preflight is advisory, not part of orchestration.
+- Release: `GATE_COMMANDS` in `scripts/release.ts` is authoritative; includes a frozen-lockfile install, types, format, web build, full tests, onboarding, followed by packed-artifact installation smoke. Preflight is advisory, not part of orchestration.
 
 ## Issues with screenshots
 
