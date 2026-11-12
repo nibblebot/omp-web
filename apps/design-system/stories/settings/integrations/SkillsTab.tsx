@@ -1,9 +1,9 @@
 import type { JSX } from "solid-js";
-import { ExtensionsTab } from "../../../../web/components/settings/integrations/ExtensionsTab";
+import { SkillsTab } from "../../../../web/components/settings/integrations/SkillsTab";
 import { setState } from "../../../../web/state";
 import { selectExtension } from "../../../../web/store/integrations";
 import { answerCalls } from "../../../session";
-import { extensionCalls, mcpStateFixture, skillsStateFixture } from "../../../fixtures/extensions";
+import { extensionCalls, skillsStateFixture } from "../../../fixtures/extensions";
 import { defineStory } from "../../../registry";
 
 /** The tab fills a column host like the dialog's body; `narrow` squeezes the host so the tab drills. */
@@ -16,32 +16,28 @@ const Host = (props: { narrow?: boolean; children: JSX.Element }) => (
 	</div>
 );
 
+/** Preloads the inventory, so a selection made in a seed resolves like a click on a loaded list. */
 function preload(): void {
-	setState("integrations", {
-		skills: skillsStateFixture.skills,
-		mcpServers: mcpStateFixture.servers,
-		mcpPaths: mcpStateFixture.paths,
-		mcpProjectConfigEnabled: true,
-	});
+	setState("integrations", "skills", skillsStateFixture.skills);
 }
 
 export default [
 	defineStory({
-		id: "settings-integrations-extensions-tab",
-		title: "ExtensionsTab",
+		id: "settings-integrations-skills-tab",
+		title: "SkillsTab",
 		component: {
-			file: "apps/web/components/settings/integrations/ExtensionsTab.tsx",
-			export: "ExtensionsTab",
+			file: "apps/web/components/settings/integrations/SkillsTab.tsx",
+			export: "SkillsTab",
 		},
 		seed: { currentWorkspaceId: "sess_09a41c" },
 		variants: [
 			{
 				name: "List",
-				description: "Both groups with their counts, the skill warning, and a switch per row.",
+				description: "The skill warning and a switch per row; nothing selected yet.",
 				seed: () => answerCalls(extensionCalls()),
 				render: () => (
 					<Host>
-						<ExtensionsTab />
+						<SkillsTab />
 					</Host>
 				),
 			},
@@ -54,20 +50,7 @@ export default [
 				},
 				render: () => (
 					<Host>
-						<ExtensionsTab />
-					</Host>
-				),
-			},
-			{
-				name: "MCP server detail",
-				seed: () => {
-					answerCalls(extensionCalls());
-					preload();
-					selectExtension({ kind: "mcp", name: "filesystem" });
-				},
-				render: () => (
-					<Host>
-						<ExtensionsTab />
+						<SkillsTab />
 					</Host>
 				),
 			},
@@ -77,7 +60,7 @@ export default [
 				seed: () => answerCalls(extensionCalls()),
 				render: () => (
 					<Host narrow>
-						<ExtensionsTab />
+						<SkillsTab />
 					</Host>
 				),
 			},
@@ -91,7 +74,7 @@ export default [
 				},
 				render: () => (
 					<Host narrow>
-						<ExtensionsTab />
+						<SkillsTab />
 					</Host>
 				),
 			},
@@ -103,23 +86,32 @@ export default [
 				},
 				render: () => (
 					<Host>
-						<ExtensionsTab />
+						<SkillsTab />
 					</Host>
 				),
 			},
 			{
 				name: "Empty",
-				description: "No skills and no servers: each group says how to add one.",
+				description: "No skills: the note says how to install one.",
+				seed: () =>
+					answerCalls(extensionCalls({ getSkillsState: () => ({ skills: [], warnings: [] }) })),
+				render: () => (
+					<Host>
+						<SkillsTab />
+					</Host>
+				),
+			},
+			{
+				name: "Load failed",
 				seed: () =>
 					answerCalls(
 						extensionCalls({
-							getSkillsState: () => ({ skills: [], warnings: [] }),
-							getMcpState: () => ({ ...mcpStateFixture, servers: [] }),
+							getSkillsState: () => Promise.reject(new Error("Skill index could not be read.")),
 						}),
 					),
 				render: () => (
 					<Host>
-						<ExtensionsTab />
+						<SkillsTab />
 					</Host>
 				),
 			},

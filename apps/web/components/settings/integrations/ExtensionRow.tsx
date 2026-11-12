@@ -3,7 +3,7 @@ import type { McpConnectionState } from "#lib/wire/protocol";
 import { mcpStatusLabel } from "../../../store/integrations";
 import { SettingToggle } from "../controls/SettingToggle";
 
-/** One skill or MCP server in the Extensions list: select it for detail, switch it on or off in place. */
+/** One skill or MCP server in its tab's list: select it for detail, switch it on or off in place. */
 export const ExtensionRow: Component<{
 	name: string;
 	source: string;

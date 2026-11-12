@@ -530,12 +530,20 @@ export const LOCAL_COMMANDS: Record<string, (args: string) => void> = {
 		setState("modal", "btw");
 	},
 	goal: goalRouteArgs,
-	// Bare `/mcp` opens the Extensions dialog on MCP servers; arguments follow the SDK's /mcp grammar and go to the agent.
-	mcp: (args) => (args.trim() ? forwardMcp(args) : openIntegrations("extensions", "mcp")),
+	// Bare `/mcp` opens the Extensions dialog on the MCP tab; arguments follow the SDK's /mcp grammar and go to the agent.
+	mcp: (args) => (args.trim() ? forwardMcp(args) : openIntegrations("mcp")),
+	// Bare `/plugins` (alias `/plugin`) opens the Extensions dialog on the Plugins tab while the
+	// plugins feature is on. Arguments, and a bare `/plugins` with the feature off, go to the agent,
+	// which runs /plugins headlessly.
+	plugins: (args) => {
+		const text = args.trim();
+		if (!text && isFeatureEnabled("plugins")) openIntegrations("plugins");
+		else forwardSlash(text ? `/plugins ${text}` : "/plugins", "plugins", "builtin", text);
+	},
 	// Skill install, update, and search are terminal commands (`omp skill ...`); the dialog covers listing and toggling.
 	skills: (args) => {
 		const sub = args.trim();
-		if (sub === "" || sub === "installed") openIntegrations("extensions", "skill");
+		if (sub === "" || sub === "installed") openIntegrations("skills");
 		else
 			pushNotice(
 				"error",

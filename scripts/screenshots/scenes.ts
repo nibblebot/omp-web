@@ -370,7 +370,7 @@ export const STILLS: readonly StillScene[] = [
 	},
 	{
 		id: "extensions",
-		shows: "Extensions dialog: skills and MCP servers",
+		shows: "Extensions dialog: the MCP tab with a server's tools",
 		source: {
 			kind: "app",
 			route: SESSION,
@@ -382,7 +382,7 @@ export const STILLS: readonly StillScene[] = [
 			],
 		},
 		viewport: "desktop",
-		ready: ["text=pdf-extract"],
+		ready: ['ul[aria-label="MCP servers"]'],
 	},
 	{
 		id: "sidebar-usage",

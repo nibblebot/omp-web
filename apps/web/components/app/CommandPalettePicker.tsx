@@ -4,6 +4,7 @@ import {
 	createSignal,
 	For,
 	onCleanup,
+	onMount,
 	Show,
 	type Component,
 } from "solid-js";
@@ -54,16 +55,28 @@ export const CommandPalettePicker: Component<{ onClose: () => void }> = (props) 
 	const sections = createMemo(() => searchPalette(query(), paletteSources(query(), storedRows())));
 	const items = createMemo(() => flattenPalette(sections()));
 
+	let search!: HTMLInputElement;
+	let list!: HTMLDivElement;
+	onMount(() => {
+		// Modal focuses its own box when it mounts; the microtask runs after that.
+		if (searchAutofocus()) queueMicrotask(() => search.focus());
+	});
+
 	const run = (item: PaletteItem) => runPaletteItem(item);
+	/** Keyboard moves keep the active row in view; pointer hover never scrolls. */
+	const move = (index: number) => {
+		setActive(index);
+		list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+	};
 	const onKeyDown = (e: KeyboardEvent) => {
 		if (isImeKey(e)) return;
 		const count = items().length;
 		if (e.key === "ArrowDown") {
 			e.preventDefault();
-			setActive((i) => Math.min(i + 1, count - 1));
+			move(Math.min(active() + 1, count - 1));
 		} else if (e.key === "ArrowUp") {
 			e.preventDefault();
-			setActive((i) => Math.max(i - 1, 0));
+			move(Math.max(active() - 1, 0));
 		} else if (e.key === "Enter") {
 			const item = items()[active()];
 			if (item === undefined) return;
@@ -75,6 +88,7 @@ export const CommandPalettePicker: Component<{ onClose: () => void }> = (props) 
 	return (
 		<Modal title="Command palette" class="command-palette-dialog" onClose={props.onClose}>
 			<input
+				ref={search}
 				class="picker-filter"
 				type="search"
 				placeholder="Search commands, sessions, settings, models"
@@ -90,9 +104,8 @@ export const CommandPalettePicker: Component<{ onClose: () => void }> = (props) 
 					setActive(0);
 				}}
 				onKeyDown={onKeyDown}
-				autofocus={searchAutofocus()}
 			/>
-			<div class="picker-list" role="listbox" aria-label="Palette results">
+			<div ref={list} class="picker-list" role="listbox" aria-label="Palette results">
 				<For each={sections()}>
 					{(section) => (
 						<div role="group" aria-label={section.group}>

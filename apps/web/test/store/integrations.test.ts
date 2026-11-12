@@ -118,24 +118,61 @@ describe("MCP switch", () => {
 });
 
 describe("selection", () => {
-	test("opening on a group selects its first item once the list loads", async () => {
+	test("opening on a tab selects its first item once its list loads", async () => {
 		handler = async (method) => {
 			if (method === "getMcpState")
 				return mcpState([server("filesystem", true), server("postgres", false)]);
+			if (method === "getSkillsState")
+				return { skills: [skill("pdf", true), skill("changelog", false)], warnings: [] };
 			if (method === "mcpInspect") return { tools: [], resources: [], prompts: [] };
+			if (method === "getSkillDetail") return { ...skill("pdf", true), body: "", globs: [] };
 			throw new Error(`unexpected ${method}`);
 		};
-		integrations.openIntegrations("extensions", "mcp");
+		setState("integrations", "mcpServers", []);
+		integrations.openIntegrations("mcp");
 		expect(state.modal).toBe("integrations");
-		expect(state.integrations.extensionsFocus).toBe("mcp");
+		expect(state.integrations.tab).toBe("mcp");
+		expect(state.integrations.extensionsSelected).toBeNull();
+		// The other tab's list arriving selects nothing.
+		integrations.refreshSkills();
+		await Bun.sleep(0);
 		expect(state.integrations.extensionsSelected).toBeNull();
 		integrations.refreshMcp();
 		await Bun.sleep(0);
 		expect(state.integrations.extensionsSelected).toEqual({ kind: "mcp", name: "filesystem" });
-		expect(state.integrations.extensionsFocus).toBeNull();
 		// The narrow layout stays on the list: opening never drills in by itself.
 		expect(state.integrations.extensionsDrill).toBe(false);
+
+		integrations.openIntegrations("skills");
+		expect(state.integrations.tab).toBe("skills");
+		expect(state.integrations.extensionsSelected).toBeNull();
+		integrations.refreshSkills();
+		await Bun.sleep(0);
+		expect(state.integrations.extensionsSelected).toEqual({ kind: "skill", name: "pdf" });
 		setState("modal", null);
+	});
+
+	test("opening on Plugins selects nothing", async () => {
+		handler = async () => mcpState([server("filesystem", true), server("postgres", false)]);
+		integrations.openIntegrations("plugins");
+		expect(state.integrations.tab).toBe("plugins");
+		integrations.refreshMcp();
+		await Bun.sleep(0);
+		expect(state.integrations.extensionsSelected).toBeNull();
+		setState("modal", null);
+	});
+
+	test("switching tabs clears the search, the selection, and the narrow drill", () => {
+		handler = async () => undefined;
+		integrations.selectExtension({ kind: "skill", name: "pdf" });
+		integrations.setExtensionsQuery("pdf");
+		expect(state.integrations.extensionsDrill).toBe(true);
+		integrations.selectIntegrationsTab("mcp");
+		expect(state.integrations.tab).toBe("mcp");
+		expect(state.integrations.extensionsQuery).toBe("");
+		expect(state.integrations.extensionsSelected).toBeNull();
+		expect(state.integrations.extensionsDrill).toBe(false);
+		expect(integrations.selectedSkill()).toBeUndefined();
 	});
 
 	test("picking a skill drills in and loads its detail", async () => {
@@ -157,7 +194,7 @@ describe("selection", () => {
 		});
 	});
 
-	test("the search filters both groups by name, description, and source", () => {
+	test("the search filters each tab's list by name, description, and source", () => {
 		integrations.setExtensionsQuery("changelog");
 		expect(integrations.visibleSkills().map((s) => s.name)).toEqual(["changelog"]);
 		expect(integrations.visibleMcpServers()).toEqual([]);

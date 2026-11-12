@@ -39,6 +39,7 @@ import {
 } from "../web.testkit";
 import { FEATURE_IDS, type FeatureId } from "../../features/manifest";
 import { activateFeatures, isFeatureEnabled } from "../../features/registry";
+import { createIntegrationState } from "../../store/slices/integrations";
 
 describe("parseInput", () => {
 	test("plain text", () => {
@@ -618,6 +619,8 @@ describe("feature-owned commands with arguments (INT-06)", () => {
 	});
 	afterAll(async () => {
 		await activateFeatures(baselineFeatures);
+		setState("integrations", createIntegrationState());
+		setState("modal", null);
 	});
 	beforeEach(async () => {
 		setState({ items: [], streaming: false });
@@ -637,23 +640,63 @@ describe("feature-owned commands with arguments (INT-06)", () => {
 		expect(posted.some((c) => c.type === "call" && c.method === "prompt")).toBe(false);
 	});
 
-	test("bare /mcp opens the Extensions dialog on MCP servers", () => {
+	test("bare /mcp opens the Extensions dialog on the MCP tab", () => {
 		setState("modal", null);
 		dispatchInput("/mcp", undefined, "enter");
 		expect(state.modal).toBe("integrations");
-		expect(state.integrations.tab).toBe("extensions");
-		expect(state.integrations.extensionsFocus).toBe("mcp");
+		expect(state.integrations.tab).toBe("mcp");
 	});
 
-	test("bare /skills and /skills installed open the Extensions dialog on skills", () => {
+	test("bare /skills and /skills installed open the Extensions dialog on the Skills tab", () => {
 		for (const input of ["/skills", "/skills installed"]) {
 			setState("modal", null);
-			setState("integrations", "extensionsFocus", null);
+			setState("integrations", "tab", "mcp");
 			dispatchInput(input, undefined, "enter");
 			expect(state.modal).toBe("integrations");
-			expect(state.integrations.tab).toBe("extensions");
-			expect(state.integrations.extensionsFocus).toBe("skill");
+			expect(state.integrations.tab).toBe("skills");
 		}
+	});
+
+	test("bare /plugins and /plugin open the Extensions dialog on the Plugins tab while the feature is on", async () => {
+		await activateFeatures(["plugins"]);
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		for (const input of ["/plugins", "/plugin"]) {
+			setState("modal", null);
+			setState("integrations", "tab", "skills");
+			posted.length = 0;
+			dispatchInput(input, undefined, "enter");
+			expect(state.modal).toBe("integrations");
+			expect(state.integrations.tab).toBe("plugins");
+			expect(posted.some((c) => c.type === "call" && c.method === "prompt")).toBe(false);
+		}
+	});
+
+	test("/plugins with arguments goes to the agent, feature on or off", async () => {
+		for (const features of [["plugins"], []] as FeatureId[][]) {
+			await activateFeatures(features);
+			connect();
+			FakeWebSocket.instances.at(-1)!.onopen?.();
+			setState("modal", null);
+			posted.length = 0;
+			dispatchInput("/plugins list", undefined, "enter");
+			expect(state.modal).toBeNull();
+			expect(posted).toContainEqual(
+				expect.objectContaining({ type: "call", method: "prompt", args: ["/plugins list"] }),
+			);
+		}
+	});
+
+	test("bare /plugins goes to the agent while the feature is off", () => {
+		connect();
+		FakeWebSocket.instances.at(-1)!.onopen?.();
+		setState("modal", null);
+		posted.length = 0;
+		dispatchInput("/plugins", undefined, "enter");
+		expect(state.modal).toBeNull();
+		expect(posted).toContainEqual(
+			expect.objectContaining({ type: "call", method: "prompt", args: ["/plugins"] }),
+		);
 	});
 });
 

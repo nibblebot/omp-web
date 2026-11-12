@@ -37,7 +37,6 @@ const QUEUED = [
 	"add-dir",
 	"remove-dir",
 	"marketplace",
-	"plugins",
 	"reload-plugins",
 	"force",
 	"forget-approvals",

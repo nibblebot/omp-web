@@ -1,7 +1,9 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { createComponent } from "solid-js";
+import { unwrap } from "solid-js/store";
 import { renderToString } from "solid-js/web";
-import { ExtensionsTab } from "../../components/settings/integrations/ExtensionsTab";
+import { McpTab } from "../../components/settings/integrations/McpTab";
+import { SkillsTab } from "../../components/settings/integrations/SkillsTab";
 import { IntegrationsDialog } from "../../components/settings/integrations/IntegrationsDialog";
 import { PluginsTab } from "../../components/settings/integrations/PluginsTab";
 import { Modal } from "../../components/ui/Modal";
@@ -14,15 +16,15 @@ import { runPaletteItem } from "../../store/palette";
 import { installJsxShim, restoreJsxShim } from "../web.testkit";
 
 /**
- * The Extensions dialog always lists skills and MCP servers; its Plugins tab appears
- * only while the `plugins` feature is active, with the tab body arriving through the
+ * The Extensions dialog always has Skills and MCP tabs; its Plugins tab appears only
+ * while the `plugins` feature is active, with the tab body arriving through the
  * feature's `pluginsTab` slot. Rendered through solid's SSR runtime with the Modal
- * shell and both tab bodies replaced by markers, so only the dialog's own composition
+ * shell and the tab bodies replaced by markers, so only the dialog's own composition
  * is asserted.
  */
 
 const originalActive = new Set<FeatureId>(FEATURE_IDS.filter(isFeatureEnabled));
-const originalTab = state.integrations.tab;
+const originalIntegrations = structuredClone(unwrap(state.integrations));
 const originalModal = state.modal;
 
 beforeEach(() => {
@@ -30,7 +32,8 @@ beforeEach(() => {
 	installJsxShim({
 		onElement(type, props) {
 			if (type === Modal) return { value: props.children };
-			if (type === ExtensionsTab) return { value: "<!--extensions-tab-->" };
+			if (type === SkillsTab) return { value: "<!--skills-tab-->" };
+			if (type === McpTab) return { value: "<!--mcp-tab-->" };
 			if (type === PluginsTab) return { value: "<!--plugins-tab-->" };
 			return undefined;
 		},
@@ -41,7 +44,7 @@ beforeEach(() => {
 afterAll(async () => {
 	restoreJsxShim();
 	await activateFeatures([...originalActive]);
-	setState("integrations", "tab", originalTab);
+	setState("integrations", originalIntegrations);
 	setState("modal", originalModal);
 });
 
@@ -52,39 +55,43 @@ async function render(features: readonly FeatureId[], tab: IntegrationTab): Prom
 	return renderToString(() => createComponent(IntegrationsDialog, { onClose: () => {} }));
 }
 
-const showsTab = (html: string, id: IntegrationTab) => html.includes(`id="integrations-tab-${id}"`);
+/** Tab ids in the order the tab list shows them. */
+const tabOrder = (html: string) =>
+	[...html.matchAll(/id="integrations-tab-(\w+)"/g)].map((match) => match[1]);
 
 describe("IntegrationsDialog with the plugins feature on", () => {
-	test("lists both tabs and shows the stored Plugins one", async () => {
+	test("lists Skills, Plugins, and MCP, and shows the stored Plugins tab", async () => {
 		const html = await render(["plugins"], "plugins");
-		expect(showsTab(html, "extensions")).toBe(true);
-		expect(showsTab(html, "plugins")).toBe(true);
+		expect(tabOrder(html)).toEqual(["skills", "plugins", "mcp"]);
 		expect(html).toContain("<!--plugins-tab-->");
-		expect(html).not.toContain("<!--extensions-tab-->");
-		expect(html).toContain("settings-control-btn");
+		expect(html).not.toContain("<!--skills-tab-->");
+		expect(html).not.toContain("<!--mcp-tab-->");
 	});
 
-	test("shows the Extensions body when Extensions is stored", async () => {
-		const html = await render(["plugins"], "extensions");
-		expect(showsTab(html, "plugins")).toBe(true);
-		expect(html).toContain("<!--extensions-tab-->");
-		expect(html).not.toContain("<!--plugins-tab-->");
+	test("shows the stored Skills or MCP tab's body only", async () => {
+		const skills = await render(["plugins"], "skills");
+		expect(skills).toContain("<!--skills-tab-->");
+		expect(skills).not.toContain("<!--plugins-tab-->");
+		expect(skills).not.toContain("<!--mcp-tab-->");
+		const mcp = await render(["plugins"], "mcp");
+		expect(mcp).toContain("<!--mcp-tab-->");
+		expect(mcp).not.toContain("<!--skills-tab-->");
+		expect(mcp).not.toContain("<!--plugins-tab-->");
 	});
 });
 
 describe("IntegrationsDialog with the plugins feature off", () => {
-	test("has no Plugins tab and no tab list, and shows Extensions even when Plugins is stored", async () => {
+	test("lists Skills and MCP, and shows Skills when Plugins is stored", async () => {
 		const html = await render([], "plugins");
-		expect(showsTab(html, "plugins")).toBe(false);
-		expect(html).not.toContain('role="tablist"');
-		expect(html).toContain("<!--extensions-tab-->");
+		expect(tabOrder(html)).toEqual(["skills", "mcp"]);
+		expect(html).toContain('role="tablist"');
+		expect(html).toContain("<!--skills-tab-->");
 		expect(html).not.toContain("<!--plugins-tab-->");
-		expect(html).toContain("settings-control-btn");
 	});
 });
 
 describe("the palette's Extensions entries", () => {
-	test("Skills and MCP servers open the dialog on that group with no feature active", () => {
+	test("Skills and MCP servers open the dialog on their tab with no feature active", () => {
 		const items = openItems({
 			debugEnabled: false,
 			pluginsEnabled: false,
@@ -94,10 +101,9 @@ describe("the palette's Extensions entries", () => {
 		setState("modal", null);
 		runPaletteItem(items.find((item) => item.label === "MCP servers")!);
 		expect(state.modal).toBe("integrations");
-		expect(state.integrations.tab).toBe("extensions");
-		expect(state.integrations.extensionsFocus).toBe("mcp");
+		expect(state.integrations.tab).toBe("mcp");
 		runPaletteItem(items.find((item) => item.label === "Skills")!);
-		expect(state.integrations.extensionsFocus).toBe("skill");
+		expect(state.integrations.tab).toBe("skills");
 	});
 
 	test("Plugins opens the dialog on the Plugins tab", () => {
@@ -107,7 +113,7 @@ describe("the palette's Extensions entries", () => {
 			providerLoginEnabled: false,
 			projects: [],
 		});
-		setState("integrations", "tab", "extensions");
+		setState("integrations", "tab", "skills");
 		runPaletteItem(items.find((item) => item.label === "Plugins")!);
 		expect(state.modal).toBe("integrations");
 		expect(state.integrations.tab).toBe("plugins");

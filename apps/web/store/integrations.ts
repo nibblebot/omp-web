@@ -43,17 +43,17 @@ export const extensionsQuery = () => state.integrations.extensionsQuery;
 export const extensionsSelected = () => state.integrations.extensionsSelected;
 export const extensionsDrill = () => state.integrations.extensionsDrill;
 
-/** Switches the dialog's active tab without opening it. */
+/**
+ * Shows `tab` in the dialog without opening it: a fresh search, the list showing (narrow
+ * layout), and the tab's first item selected once its list loads.
+ */
 export function selectIntegrationsTab(tab: IntegrationTab): void {
-	setState("integrations", "tab", tab);
+	setState("integrations", integrationsOpenPatch(tab));
 }
 
-/**
- * Opens the Extensions dialog on `tab` (used by `/mcp`, `/skills`, and the command palette).
- * `group` selects that group's first item once its list loads.
- */
-export function openIntegrations(tab: IntegrationTab, group: ExtensionKind | null = null): void {
-	setState("integrations", integrationsOpenPatch(tab, group));
+/** Opens the Extensions dialog on `tab` (used by `/skills`, `/mcp`, `/plugins`, and the command palette). */
+export function openIntegrations(tab: IntegrationTab): void {
+	selectIntegrationsTab(tab);
 	setState("modal", "integrations");
 }
 
@@ -76,13 +76,13 @@ function matchesQuery(query: string, ...fields: Array<string | undefined>): bool
 	return needle === "" || fields.join(" ").toLowerCase().includes(needle);
 }
 
-/** Skills matching the search text (name, description, source). */
+/** Skills matching the Skills tab's search text (name, description, source). */
 export const visibleSkills = (): SkillSummary[] =>
 	skills().filter((skill) =>
 		matchesQuery(extensionsQuery(), skill.name, skill.description, skill.source),
 	);
 
-/** MCP servers matching the search text (name, source, transport). */
+/** MCP servers matching the MCP tab's search text (name, source, transport). */
 export const visibleMcpServers = (): McpServerSummary[] =>
 	mcpServers().filter((server) =>
 		matchesQuery(extensionsQuery(), server.name, mcpSourceLabel(server), server.transport),
@@ -130,7 +130,7 @@ export function leaveExtensionDetail(): void {
 	setState("integrations", "extensionsDrill", false);
 }
 
-/** Selects the first item of the group an opener asked for, once that group has loaded. */
+/** Selects the first item of the kind an opener or tab switch asked for, once that list has loaded. */
 function resolveExtensionFocus(): void {
 	const focus = state.integrations.extensionsFocus;
 	if (focus === null || state.integrations.extensionsSelected !== null) return;

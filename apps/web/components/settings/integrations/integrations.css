@@ -1,9 +1,10 @@
 /* Extensions dialog (IntegrationsDialog.tsx and its tabs). Reuses picker-filter,
    msg-notice, tool-collapsed-note, settings-toggle, and settings-control-btn from
-   the shared stylesheets. The Extensions tab lays list and detail side by side and
-   drills from list to detail when its own container is narrow (a container query,
-   so the same component narrows in a dock or story frame). Forms stack on narrow
-   widths and go two-column only when the dialog has room. */
+   the shared stylesheets. The Skills and MCP tabs (ExtensionsLayout.tsx) lay list
+   and detail side by side and drill from list to detail when their own container
+   is narrow (a container query, so the same component narrows in a dock or story
+   frame). Forms stack on narrow widths and go two-column only when the dialog has
+   room. */
 
 /* The wide Modal has a fixed height so the list and detail panes scroll inside it. */
 .integrations-dialog {
@@ -30,7 +31,7 @@
 	margin-bottom: var(--space-4);
 }
 
-/* Reload stays right-aligned when the tab list is hidden (one feature on). */
+/* Reload stays right-aligned, also when it wraps below the tabs. */
 .integrations-head > .settings-control-btn {
 	margin-left: auto;
 }
@@ -228,8 +229,8 @@
 	gap: var(--space-5);
 }
 
-/* Extensions tab: list pane and detail pane. */
-.extensions-tab {
+/* Skills and MCP tabs: list pane and detail pane. */
+.extensions-view {
 	flex: 1 1 auto;
 	min-height: 0;
 	container-type: inline-size;
@@ -265,23 +266,19 @@
 	align-self: flex-start;
 }
 
-.extensions-group {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-3);
-}
-.extensions-group-head {
+/* The search fills the row; the MCP tab's Add server sits beside it. */
+.extensions-search {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
 	gap: var(--space-3);
 }
-.extensions-group-title {
-	margin: 0;
-	color: var(--muted);
-	font-size: var(--fs-sm);
-	font-weight: 500;
-	text-transform: none;
+.extensions-search .picker-filter {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin-bottom: 0;
+}
+.extensions-search .settings-control-btn {
+	flex: none;
 }
 
 .extensions-list {

@@ -7,23 +7,31 @@ import type {
 	SkillsState,
 } from "#lib/wire/protocol";
 
-export type IntegrationTab = "extensions" | "plugins";
+export type IntegrationTab = "skills" | "plugins" | "mcp";
 
-/** The two groups of the Extensions tab. */
+/** The two inventories with a list and a detail: the Skills tab and the MCP tab. */
 export type ExtensionKind = "skill" | "mcp";
 
-/** One selected row of the Extensions tab. */
+/** The selected row of the Skills or MCP tab. */
 export interface ExtensionRef {
 	kind: ExtensionKind;
 	name: string;
 }
 
+/** The inventory each tab lists; Plugins has its own list. */
+const TAB_KIND: Record<IntegrationTab, ExtensionKind | null> = {
+	skills: "skill",
+	plugins: null,
+	mcp: "mcp",
+};
+
 export interface IntegrationState {
 	tab: IntegrationTab;
-	/** Extensions search text; filters name, description, and source across both groups. */
+	/** Search text of the visible tab; filters its list by name, description, and source. */
 	extensionsQuery: string;
+	/** Selected row. Each tab shows the detail only for a row of its own kind. */
 	extensionsSelected: ExtensionRef | null;
-	/** Group whose first item is selected once its list arrives (set by `/skills`, `/mcp`, the palette). */
+	/** Kind whose first item is selected once its list arrives (set on opening or switching to its tab). */
 	extensionsFocus: ExtensionKind | null;
 	/** Narrow layout only: true shows the detail instead of the list. */
 	extensionsDrill: boolean;
@@ -55,7 +63,7 @@ export interface IntegrationState {
 
 export function createIntegrationState(): IntegrationState {
 	return {
-		tab: "extensions" as IntegrationTab,
+		tab: "skills" as IntegrationTab,
 		extensionsQuery: "",
 		extensionsSelected: null as ExtensionRef | null,
 		extensionsFocus: null as ExtensionKind | null,
@@ -80,19 +88,15 @@ export function createIntegrationState(): IntegrationState {
 }
 
 /**
- * Store patch that opens the dialog fresh: `tab`, an empty search, no selection, the list showing,
- * and (for the Extensions tab) `group`'s first item to be selected once its list loads. Core
- * openers (the command palette) apply it without importing the feature's store module.
+ * Store patch that shows `tab` fresh: an empty search, no selection, the list showing, and the
+ * tab's first item (Skills and MCP) to be selected once its list loads.
  */
-export function integrationsOpenPatch(
-	tab: IntegrationTab,
-	group: ExtensionKind | null = null,
-): Partial<IntegrationState> {
+export function integrationsOpenPatch(tab: IntegrationTab): Partial<IntegrationState> {
 	return {
 		tab,
 		extensionsQuery: "",
 		extensionsSelected: null,
-		extensionsFocus: group,
+		extensionsFocus: TAB_KIND[tab],
 		extensionsDrill: false,
 		skillDetail: null,
 	};

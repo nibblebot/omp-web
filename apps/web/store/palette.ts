@@ -151,10 +151,7 @@ export function runPaletteItem(item: PaletteItem): void {
 				return;
 			}
 			if (action.target === "skills" || action.target === "mcp" || action.target === "plugins") {
-				openIntegrations(
-					action.target === "plugins" ? "plugins" : "extensions",
-					action.target === "skills" ? "skill" : action.target === "mcp" ? "mcp" : null,
-				);
+				openIntegrations(action.target);
 				return;
 			}
 			setState("modal", action.target);

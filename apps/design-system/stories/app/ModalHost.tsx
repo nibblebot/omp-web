@@ -32,7 +32,7 @@ export default defineStory({
 		{
 			name: "Extensions",
 			description:
-				'`state.modal` is "integrations" (/mcp, /skills): the Extensions dialog lists skills and MCP servers, plus a Plugins tab while the plugins feature is on.',
+				'`state.modal` is "integrations" (/skills, /mcp, /plugins): the Extensions dialog with its Skills and MCP tabs, plus a Plugins tab while the plugins feature is on.',
 			seed: () => {
 				answerCalls(extensionCalls());
 				setState("modal", "integrations");

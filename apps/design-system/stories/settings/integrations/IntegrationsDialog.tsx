@@ -1,7 +1,7 @@
 import { IntegrationsDialog } from "../../../../web/components/settings/integrations/IntegrationsDialog";
 import { markFeaturesActive } from "../../../../web/features/preferences";
 import { setState } from "../../../../web/state";
-import { selectExtension } from "../../../../web/store/integrations";
+import { selectExtension, selectIntegrationsTab } from "../../../../web/store/integrations";
 import { answerCalls } from "../../../session";
 import { extensionCalls, mcpStateFixture, skillsStateFixture } from "../../../fixtures/extensions";
 import { mcpTestFailed, mcpTestPassed } from "../../../fixtures/overlays";
@@ -29,9 +29,19 @@ export default [
 		seed: { currentWorkspaceId: "sess_09a41c" },
 		variants: [
 			{
-				name: "Extensions",
-				description: "Skills and MCP servers in one list; nothing selected yet.",
+				name: "Skills",
+				description: "The Skills tab, as the dialog opens by default; nothing selected yet.",
 				seed: () => answerCalls(extensionCalls()),
+				render: (ctx) => <IntegrationsDialog onClose={ctx.close} />,
+			},
+			{
+				name: "MCP",
+				description:
+					"Opened on the MCP tab (/mcp): the first server is selected once the list loads.",
+				seed: () => {
+					answerCalls(extensionCalls());
+					selectIntegrationsTab("mcp");
+				},
 				render: (ctx) => <IntegrationsDialog onClose={ctx.close} />,
 			},
 			{
@@ -50,6 +60,7 @@ export default [
 				seed: () => {
 					answerCalls(extensionCalls());
 					preload();
+					selectIntegrationsTab("mcp");
 					selectExtension({ kind: "mcp", name: "filesystem" });
 				},
 				render: (ctx) => <IntegrationsDialog onClose={ctx.close} />,
@@ -59,6 +70,7 @@ export default [
 				seed: () => {
 					answerCalls(extensionCalls());
 					preload();
+					selectIntegrationsTab("mcp");
 					selectExtension({ kind: "mcp", name: "filesystem" });
 					setState("integrations", "mcpTestResult", mcpTestPassed);
 				},
@@ -70,6 +82,7 @@ export default [
 				seed: () => {
 					answerCalls(extensionCalls());
 					preload();
+					selectIntegrationsTab("mcp");
 					selectExtension({ kind: "mcp", name: "linear" });
 					setState("integrations", "mcpTestResult", mcpTestFailed);
 				},
@@ -77,9 +90,10 @@ export default [
 			},
 			{
 				name: "Search",
-				description: "The search filters both groups; a group with no match collapses.",
+				description: "The search filters the visible tab's list.",
 				seed: () => {
 					answerCalls(extensionCalls());
+					selectIntegrationsTab("mcp");
 					setState("integrations", "extensionsQuery", "project");
 				},
 				render: (ctx) => <IntegrationsDialog onClose={ctx.close} />,
@@ -132,9 +146,9 @@ export default [
 				render: (ctx) => <IntegrationsDialog onClose={ctx.close} />,
 			},
 			{
-				name: "Extensions only",
+				name: "Plugins off",
 				description:
-					"The Plugins feature is off: no tab bar, and skills and MCP servers stay listed under the Extensions title with the reload button.",
+					"The Plugins feature is off: only the Skills and MCP tabs, under the Extensions title with the reload button.",
 				seed: () => {
 					markFeaturesActive([]);
 					answerCalls(extensionCalls());

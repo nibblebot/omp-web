@@ -53,10 +53,9 @@ export type PaletteOpenTarget =
 	| "add-project"
 	| "sign-in"
 	| "login"
-	/** Extensions dialog on that group's first item. */
+	/** Extensions dialog on the same-named tab (Skills and MCP select their first item). */
 	| "skills"
 	| "mcp"
-	/** Extensions dialog on the Plugins tab. */
 	| "plugins";
 
 /** What choosing an item does. Plain data: `store/palette.ts` executes it. */
