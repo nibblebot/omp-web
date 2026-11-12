@@ -45,6 +45,7 @@ import { useStickyScroll } from "./useStickyScroll";
 import { StreamingBlock } from "./StreamingBlock";
 import {
 	AdvisorCard,
+	AgentMessageCard,
 	AssistantCard,
 	CompactionCard,
 	GuestPromptCard,
@@ -320,6 +321,9 @@ export const TranscriptStream: Component<{
 								</Match>
 								<Match when={item.kind === "guestPrompt" && item}>
 									{(guest) => <GuestPromptCard item={guest()} />}
+								</Match>
+								<Match when={item.kind === "agentMessage" && item}>
+									{(message) => <AgentMessageCard item={message()} />}
 								</Match>
 								<Match when={item.kind === "notice" && item}>
 									{(notice) => <NoticeCard item={notice()} />}

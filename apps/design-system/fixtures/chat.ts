@@ -1,6 +1,7 @@
 import type { AcItem } from "../../web/components/chat/composer/AutocompletePopup";
 import type { UsageLike } from "../../web/usage/usage";
 import type { AdvisorItem } from "../../web/store/slices/advisor";
+import type { AgentMessageItem } from "../../web/store/slices/agent-message";
 import type {
 	BashItem,
 	Block,
@@ -523,6 +524,32 @@ export const chatAdvisorBlockerItem: AdvisorItem = {
 			turnsAgo: 1,
 		},
 	],
+};
+
+/** AgentMessageCard: a scout subagent reports a finding to the main agent while it is still working. */
+export const chatAgentMessageItem: AgentMessageItem = {
+	kind: "agentMessage",
+	id: 507,
+	key: "irc-7f3a91",
+	from: "PreStyles",
+	text: "Heads up before I finish: `base.css` sets `pre { overflow-x: auto }`, so a button positioned inside the `<pre>` scrolls away with long lines. Pin it on a wrapper around the fence instead.",
+};
+
+/** AgentMessageCard: a peer's multi-line answer to a question the main agent asked it. */
+export const chatAgentMessageReplyItem: AgentMessageItem = {
+	kind: "agentMessage",
+	id: 508,
+	key: "irc-7f3ab2",
+	from: "MigrationAudit",
+	text: [
+		"Checked all three migrations:",
+		"",
+		"- 0041 adds review_anchor with a default, safe to run online",
+		"- 0042 backfills in batches of 5000",
+		"- 0043 drops the old index only after the backfill",
+		"",
+		"Nothing blocks the deploy.",
+	].join("\n"),
 };
 
 /** ToolCard list mixing read, running bash and task renderers in one transcript. */

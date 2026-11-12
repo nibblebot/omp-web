@@ -8,6 +8,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ChatItem, ToolItem } from "../state";
 import { advisorNotesOf } from "../store/slices/advisor";
 import { guestPromptOf } from "../store/slices/collab";
+import { agentMessageOf } from "../store/slices/agent-message";
 import { compactionItemOf } from "../store/compaction-view";
 import { extractText, scanImages } from "#lib/wire/tool-result";
 import { slimWaitJobs } from "#lib/wire/tool-live";
@@ -181,12 +182,14 @@ export function createHistoryBuilder(nextId: () => number = sequence()): History
 					const card = compactionItemOf(msg);
 					if (card !== null) items.push({ ...card, id: nextId() });
 				} else {
-					// Advisor cards render inline like the TUI; other custom/developer
-					// messages stay hidden.
+					// Advisor cards, guest prompts and other agents' messages render inline
+					// like the TUI; other custom/developer messages stay hidden.
 					const notes = advisorNotesOf(msg);
 					if (notes !== null) items.push({ kind: "advisor", id: nextId(), notes });
 					const guest = guestPromptOf(msg);
 					if (guest !== null) items.push({ kind: "guestPrompt", id: nextId(), ...guest });
+					const agent = agentMessageOf(msg);
+					if (agent !== null) items.push({ kind: "agentMessage", id: nextId(), ...agent });
 					// A job that settled after its call returned: the delivery settles the parked card.
 					const delivered = asyncResultJobsOf(msg);
 					if (delivered.length > 0) {

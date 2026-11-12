@@ -5,4 +5,5 @@ export { NoticeCard } from "./NoticeCard";
 export { UserCard } from "./UserCard";
 export { UserCommandCard } from "./UserCommandCard";
 export { GuestPromptCard } from "./GuestPromptCard";
+export { AgentMessageCard } from "./AgentMessageCard";
 export { ToolRunRow } from "./ToolRunRow";

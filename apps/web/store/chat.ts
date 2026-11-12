@@ -40,6 +40,7 @@ import { currentNotifyPermission } from "./notify";
 import { reportError } from "./toasts";
 import { advisorNotesOf } from "./slices/advisor";
 import { collabLive, guestPromptOf } from "./slices/collab";
+import { agentMessageOf } from "./slices/agent-message";
 import { flushBtwEphemeral } from "./slices/btw";
 import { applyGoalUpdated } from "./slices/goals";
 import { settingValue } from "./settings";
@@ -261,6 +262,22 @@ function indexWhere(match: (item: ChatItem) => boolean): number {
 
 export function findToolIndex(toolCallId: string): number {
 	return indexWhere((it) => it.kind === "tool" && it.toolCallId === toolCallId);
+}
+
+/**
+ * Push the card of another agent's message unless the transcript already holds
+ * that delivery. The SDK announces a delivery (`irc_message`) when it arrives and
+ * sends the same record again as a `message_end` once it joins the transcript (the
+ * next step boundary of a running turn, or the turn it wakes); a delivery folded
+ * in without a turn has no `message_end`. Whichever comes first draws the card, and
+ * a history reload in between keeps it single: the rebuilt list either holds the
+ * entry (the later event finds it) or not yet (the later event draws it).
+ */
+function pushAgentMessage(message: unknown): void {
+	const card = agentMessageOf(message);
+	if (card === null) return;
+	if (indexWhere((it) => it.kind === "agentMessage" && it.key === card.key) >= 0) return;
+	pushItem({ kind: "agentMessage", id: nextId++, ...card });
 }
 
 const bashIndex = (id: number): number => indexWhere((it) => it.kind === "bash" && it.id === id);
@@ -737,6 +754,7 @@ export function applyEvent(e: WireSessionEvent): void {
 				if (notes !== null) pushItem({ kind: "advisor", id: nextId++, notes });
 				const guest = guestPromptOf(msg);
 				if (guest !== null) pushItem({ kind: "guestPrompt", id: nextId++, ...guest });
+				pushAgentMessage(msg);
 			}
 			break;
 		}
@@ -951,8 +969,12 @@ export function applyEvent(e: WireSessionEvent): void {
 				message: `Fallback model ${e.model} succeeded`,
 			});
 			break;
+		case "irc_message":
+			// Another agent's message, as it is delivered (see pushAgentMessage).
+			pushAgentMessage(e.message);
+			break;
 		default:
-			// turn_start/turn_end, ttsr_triggered, todo_*, irc_message: ignored.
+			// turn_start/turn_end, ttsr_triggered, todo_*: ignored.
 			break;
 	}
 }

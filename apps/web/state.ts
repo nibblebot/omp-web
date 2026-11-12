@@ -9,6 +9,7 @@ import { currentThemeSelection, type ThemeSelection } from "./prefs/theme";
 import type { ThemesPayload } from "#lib/themes/types";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AdvisorItem } from "./store/slices/advisor";
+import type { AgentMessageItem } from "./store/slices/agent-message";
 import type { SessionStats } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { UsageReport } from "@oh-my-pi/pi-ai";
 import type { TextAttachment } from "./prompt/attachments";
@@ -220,6 +221,7 @@ export type ChatItem =
 	| CompactionItem
 	| AdvisorItem
 	| { kind: "guestPrompt"; id: number; from: string; text: string }
+	| AgentMessageItem
 	| { kind: "notice"; id: number; level: string; message: string; command?: string };
 
 export type ToolItem = Extract<ChatItem, { kind: "tool" }>;

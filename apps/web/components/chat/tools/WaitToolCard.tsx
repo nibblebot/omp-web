@@ -92,7 +92,9 @@ function createRowClock(ticking: () => boolean): () => number {
  * with the summary, a segmented progress bar and the counts. A row opens in
  * place to its widget, output tail and actions. The calls of a run are folded
  * by `chat/wait-runs.ts`; the card renders at the first and stays mounted as
- * the run grows. A wait that returned a peer message, or found nothing to
+ * the run grows. A wait that returned a peer message (`details.waited`, only in
+ * transcripts before SDK 18.18.9; since then the message is its own
+ * `AgentMessageCard` and the wait just reads interrupted), or found nothing to
  * wait for, shows its result text. `originOf` lets a row find the card that
  * started its job.
  */

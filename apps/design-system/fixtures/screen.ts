@@ -13,6 +13,7 @@ import type {
 } from "../../web/state";
 import type { UsageLike } from "../../web/usage/usage";
 import type { AdvisorItem } from "../../web/store/slices/advisor";
+import type { AgentMessageItem } from "../../web/store/slices/agent-message";
 import { FIXTURE_NOW } from "./session";
 import { rosterAppEntries, rosterProjects } from "./roster";
 import { sessionModel } from "./overlays";
@@ -181,6 +182,15 @@ const taskTool: ToolItem = {
 	args: { description: "Check fence rendering call sites" },
 	status: "done",
 	output: "2 agents finished.",
+};
+
+/** A message the PreStyles scout sent the main agent while the task ran; it lands after the task returns. */
+const preStylesMessage: AgentMessageItem = {
+	kind: "agentMessage",
+	id: 19,
+	key: "irc-pre-styles-1",
+	from: "PreStyles",
+	text: "Heads up: `base.css` sets `pre { overflow-x: auto }`, so a button placed inside the `<pre>` scrolls away with long lines. Pin it on a wrapper around the fence instead.",
 };
 
 /** SubagentInfo list for the task tool card, keyed to the task item's toolCallId. */
@@ -557,7 +567,7 @@ const answerNote: ChatItem = {
 	duration: 1_980,
 };
 
-/** A full settled conversation: prompts, markdown, thinking, every common tool kind, a todo board, subagents, compaction, a notice, bash, advisor. */
+/** A full settled conversation: prompts, markdown, thinking, every common tool kind, a todo board, subagents and a subagent's message, compaction, a notice, bash, advisor. */
 export const screenItems: ChatItem[] = [
 	userAsk,
 	planNote,
@@ -580,6 +590,7 @@ export const screenItems: ChatItem[] = [
 	},
 	fenceCornerSearch,
 	taskTool,
+	preStylesMessage,
 	fenceParents,
 	summaryNote,
 	userBash,

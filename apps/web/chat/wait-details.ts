@@ -39,7 +39,7 @@ export interface WaitCall {
 	at?: number;
 	/** The wait was cut short by steering, a peer message or a completion notice. */
 	interrupted: boolean;
-	/** The wait returned a peer message (`details.waited`). */
+	/** The wait returned a peer message (`details.waited`, only in transcripts before SDK 18.18.9; since then the message is its own agent message card). */
 	message: boolean;
 }
 
@@ -73,7 +73,7 @@ function parseWidgets(details: unknown): Map<string, WireJobWidgetView> {
 	return widgets;
 }
 
-/** Whether `details.waited` holds a peer message: a non-empty list (SDK 18.17.0 returns every queued message, oldest first) or the single message object an older session recorded. */
+/** Whether `details.waited` holds a peer message: a non-empty list (SDK 18.17.0 returns every queued message, oldest first) or the single message object an older session recorded. Only transcripts before SDK 18.18.9 carry it; since then a wait a message ends reports `interrupted`, and the message arrives as an `irc:incoming` custom message (`store/slices/agent-message.ts`). */
 function consumedMessage(waited: unknown): boolean {
 	return Array.isArray(waited) ? waited.length > 0 : Boolean(waited);
 }

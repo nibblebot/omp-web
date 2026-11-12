@@ -1,4 +1,4 @@
-/* Chat: message stream, markdown (.md), run-rows, shimmer, compaction, transcript empty state, inline images, msg-toolbar, advisor card. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
+/* Chat: message stream, markdown (.md), run-rows, shimmer, compaction, transcript empty state, inline images, msg-toolbar, advisor card, agent message card. Part of the global stylesheet; cascade order is set by the @import manifest in src/styles.css. */
 
 /* Freshly-revealed text fades in once; the span is recreated per flush, which
    restarts this mount-triggered animation. */
@@ -1108,4 +1108,28 @@ pre {
 }
 .advisor-summary:hover .advisor-label {
 	text-decoration: underline;
+}
+
+/* --- Agent messages (another agent's IRC message to this session) --- */
+
+.agent-message {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	max-width: 100%;
+	padding: var(--space-3) var(--space-4);
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--accent-border);
+	border-radius: var(--r-md);
+	background: var(--bg-deep);
+}
+.agent-message-from {
+	font-size: var(--fs-micro);
+	letter-spacing: var(--ls-micro);
+	text-transform: uppercase;
+	color: var(--muted-2);
+}
+.agent-message-text {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
