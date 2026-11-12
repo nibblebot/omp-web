@@ -139,6 +139,25 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 		if (expanding) syncProjects();
 	};
 
+	/** Rows the sidebar shows: all of them, or with "running only" on, those
+	 *  that are not asleep plus the pinned ones (the attached session and the
+	 *  target of a switch that is waking, attaching or failed, which the row's
+	 *  `selected` highlight follows). */
+	const shownRows = (sessions: RosterEntry[]): RosterEntry[] => {
+		if (!state.sidebarRunningOnly) return sessions;
+		const target = state.transcriptTarget;
+		const switching =
+			state.transcriptPhase === "waking" ||
+			state.transcriptPhase === "attaching" ||
+			state.transcriptPhase === "failed";
+		return sessions.filter((d) =>
+			shownWhenRunningOnly(
+				d.status,
+				d.workspaceId === state.currentWorkspaceId || (switching && d.workspaceId === target),
+			),
+		);
+	};
+
 	/** One registered-project group: collapsible header (folder icon, name, and a
 	 *  right tail: roll-up summary and signal while collapsed, the "+" New
 	 *  workspace trigger (git projects only) and the "⋯" menu carrying Remove
@@ -178,24 +197,8 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 			}),
 		);
 
-		// Rows the sidebar shows: all of them, or with "running only" on, those
-		// that are not asleep plus the pinned ones (the attached session and the
-		// target of a switch that is waking, attaching or failed, which the row's
-		// `selected` highlight follows). The roll-up above stays on every row.
-		const visibleSessions = createMemo(() => {
-			if (!state.sidebarRunningOnly) return props.sessions;
-			const target = state.transcriptTarget;
-			const switching =
-				state.transcriptPhase === "waking" ||
-				state.transcriptPhase === "attaching" ||
-				state.transcriptPhase === "failed";
-			return props.sessions.filter((d) =>
-				shownWhenRunningOnly(
-					d.status,
-					d.workspaceId === state.currentWorkspaceId || (switching && d.workspaceId === target),
-				),
-			);
-		});
+		// Rows the sidebar shows (shownRows). The roll-up above stays on every row.
+		const visibleSessions = createMemo(() => shownRows(props.sessions));
 
 		// Rendered rows: the live ones plus rows still playing their exit. Seeded
 		// from the first render, so page load never animates; a row enters only
@@ -397,13 +400,28 @@ export const ProjectGroups: Component<{ groups: ProjectGroupsData }> = (props) =
 			</Show>
 			{/* Keyed by projectId: sessionsByProject() rebuilds group objects on every
 			    roster change, and keying by object would remount each group (and any
-			    open New workspace popover with its in-flight create). */}
+			    open New workspace popover with its in-flight create). With "running
+			    only" on, a project with no shown row is hidden too, unless its New
+			    workspace popover is open or the palette is pointing at it. */}
 			<For each={props.groups.map((g) => g.project.projectId)}>
-				{(projectId) => (
-					<Show when={props.groups.find((g) => g.project.projectId === projectId)}>
-						{(g) => <ProjectGroup project={g().project} sessions={g().sessions} />}
-					</Show>
-				)}
+				{(projectId) => {
+					const group = () => props.groups.find((g) => g.project.projectId === projectId);
+					const shown = createMemo(() => {
+						const g = group();
+						if (!g) return false;
+						return (
+							!state.sidebarRunningOnly ||
+							shownRows(g.sessions).length > 0 ||
+							state.newWorkspaceProjectId === projectId ||
+							state.highlightProjectId === projectId
+						);
+					});
+					return (
+						<Show when={shown() && group()}>
+							{(g) => <ProjectGroup project={g().project} sessions={g().sessions} />}
+						</Show>
+					);
+				}}
 			</For>
 			{/* Bottom of the project list: the only add-project entry point. */}
 			<button

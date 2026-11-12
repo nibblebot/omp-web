@@ -14,7 +14,8 @@ import { SidebarUsage } from "./SidebarUsage";
 // `state.view === "chat"` (the fleet is the only web UI runtime). Shell:
 // derives the project-first group list (sessionsByProject) and composes the
 // group rendering (ProjectGroups) under the shared SidebarHeader (wordmark,
-// the running-only filter toggle that hides asleep rows, collapse toggle).
+// the running-only filter toggle that hides asleep rows and projects with no
+// running row, collapse toggle).
 // Each registered project is one group: its rows are the checkouts (main checkout,
 // worktrees, clones). The group header carries a "+" (New workspace popover) and a
 // remove-project action, both shown on header hover. Rows without a registered

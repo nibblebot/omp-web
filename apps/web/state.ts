@@ -645,7 +645,8 @@ export const [state, setState] = createStore({
 	localStorage.getItem(SIDEBAR_TITLE_LINES_KEY) === "2"
 		? 2
 		: 1) as 1 | 2,
-	// Roster-sidebar "running only" filter (persisted toggle): hides asleep rows.
+	// Roster-sidebar "running only" filter (persisted toggle): hides asleep rows
+	// and projects left with no shown row.
 	sidebarRunningOnly:
 		typeof localStorage !== "undefined" &&
 		localStorage.getItem(SIDEBAR_RUNNING_ONLY_KEY) === "true",

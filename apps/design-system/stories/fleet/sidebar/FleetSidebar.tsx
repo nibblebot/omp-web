@@ -96,7 +96,7 @@ export default defineStory({
 		{
 			name: "Running only",
 			description:
-				"The header filter is on (set through the real setSidebarRunningOnly): asleep rows are hidden, every other status stays, and nixos-config, whose only row is asleep, keeps its header and shows its summary.",
+				"The header filter is on (set through the real setSidebarRunningOnly): asleep rows are hidden, every other status stays, and nixos-config, whose only row is asleep, is hidden with its header.",
 			seed: () => {
 				seedRosterFleet({
 					sessionRoster: [
