@@ -1,13 +1,12 @@
 /**
  * omp-web release orchestrator (docs/release.md, "Release orchestrator").
  *
- * One command: `bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm]`.
+ * One command: `bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes]`.
  *
  * The deterministic core (commit classification, version bumping, changelog
- * skeleton, manifest generation, tarball validation) is exported for unit
- * tests; `main` wires it to git/gh/bun. The LLM changelog summarizer
- * (./release-llm) is imported statically and degrades to the
- * deterministic fallback on any failure.
+ * section, manifest generation, tarball validation) is exported for unit
+ * tests; `main` wires it to git/gh/bun. The changelog is commits only: one
+ * line per commit, grouped by class.
  */
 import {
 	existsSync,
@@ -22,7 +21,6 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import * as readline from "node:readline/promises";
 import { compareVersions, sha256Of } from "../apps/cli/update";
-import { summarizeChangelog } from "./release-llm";
 
 export const GITHUB_REPO = "nibblebot/omp-web";
 export const GITHUB_RELEASES_BASE = "https://github.com/nibblebot/omp-web/releases/latest/download";
@@ -95,7 +93,7 @@ export async function runGate(dryRun: boolean, runner: GateRunner = run): Promis
 	}
 }
 
-export type CommitClass = "breaking" | "feat" | "fix" | "other";
+export type CommitClass = "breaking" | "feat" | "fix" | "perf" | "docs" | "chore";
 
 export interface CommitInfo {
 	hash: string;
@@ -109,31 +107,19 @@ export interface Group {
 	commits: CommitInfo[];
 }
 
-/** LLM-shaped changelog draft: deterministic structure, LLM prose. Draft
- *  groups are cls-keyed (the heading mapping is ours, per the contract). */
-export interface ChangelogDraft {
-	overview: string | null;
-	groups: { cls: CommitClass; bullets: string[] }[];
-}
-
 const HEADINGS: Record<CommitClass, string> = {
 	breaking: "Breaking changes",
 	feat: "Features",
-	fix: "Bug fixes",
-	other: "Maintenance & other",
+	fix: "Fixes",
+	perf: "Performance",
+	docs: "Docs",
+	chore: "Chores",
 };
 
-const GROUP_ORDER: CommitClass[] = ["breaking", "feat", "fix", "other"];
-
-const COMMIT_CLASSES: Record<CommitClass, true> = {
-	breaking: true,
-	feat: true,
-	fix: true,
-	other: true,
-};
+const GROUP_ORDER: CommitClass[] = ["breaking", "feat", "fix", "perf", "docs", "chore"];
 
 const USAGE =
-	"usage: bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--no-llm] [--notes-file <path>] [--stage | --go]";
+	"usage: bun scripts/release.ts [<x.y.z>] [--dry-run] [--yes] [--notes-file <path>] [--stage | --go]";
 
 /** Parsed CLI surface for the release orchestrator. */
 export interface ReleaseArgs {
@@ -141,7 +127,6 @@ export interface ReleaseArgs {
 	version?: string;
 	dryRun: boolean;
 	yes: boolean;
-	noLlm: boolean;
 	/** Manual release notes for gh (markdown file); else the changelog section. */
 	notesFile?: string;
 	/** Generate + validate everything, then stop before publishing (review mode). */
@@ -154,7 +139,7 @@ export interface ReleaseArgs {
 export function parseReleaseArgs(
 	argv: string[],
 ): { ok: true; args: ReleaseArgs } | { ok: false; error: string } {
-	const args: ReleaseArgs = { dryRun: false, yes: false, noLlm: false, stage: false, go: false };
+	const args: ReleaseArgs = { dryRun: false, yes: false, stage: false, go: false };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === "--dry-run") {
@@ -163,10 +148,6 @@ export function parseReleaseArgs(
 		}
 		if (arg === "--yes") {
 			args.yes = true;
-			continue;
-		}
-		if (arg === "--no-llm") {
-			args.noLlm = true;
 			continue;
 		}
 		if (arg === "--notes-file") {
@@ -192,11 +173,6 @@ export function parseReleaseArgs(
 	if (args.go) {
 		if (args.version !== undefined)
 			return { ok: false, error: "--go publishes the staged release; pass no version" };
-		if (args.noLlm)
-			return {
-				ok: false,
-				error: "--go publishes the staged release; it does not generate a changelog",
-			};
 		if (args.notesFile !== undefined)
 			return {
 				ok: false,
@@ -208,25 +184,42 @@ export function parseReleaseArgs(
 
 /**
  * Classify a commit subject/body (conventional-commits prefixes). A breaking
- * match wins over feat/fix; everything unrecognized (docs:, chore:, compound
- * prefixes like `fleet+ui:`, untyped subjects) is "other".
+ * match wins over everything; feat/fix/perf/docs need the exact `type:` or
+ * `type(scope):` prefix; everything else (chore, refactor, test, style,
+ * build, ci, untyped subjects, compound prefixes like `fleet+ui:`) is "chore".
  */
 export function classifyCommit(subject: string, body: string): CommitClass {
-	// BREAKING CHANGE footer/note wins over everything.
-	if (/BREAKING CHANGE/i.test(subject) || /BREAKING CHANGE/i.test(body)) return "breaking";
+	// A `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer (uppercase, at a line
+	// start, per Conventional Commits) wins over everything; prose such as
+	// "upstream breaking changes" in a body is not a footer.
+	if (/^BREAKING[ -]CHANGE:/m.test(body)) return "breaking";
 	// type!: and compound type+scope!: (e.g. "feat!:", "fleet+ui!:").
 	if (/^[a-z]+(?:[a-z+]*)?!:/.test(subject)) return "breaking";
 	// type(scope)!: (e.g. "feat(ui)!:").
 	if (/^[a-z]+(?:[a-z+]*)?\([^)]*\)!:/.test(subject)) return "breaking";
-	if (/^feat(?:\()?/.test(subject)) return "feat";
-	if (/^fix(?:\()?/.test(subject)) return "fix";
-	return "other";
+	if (/^feat(\([^)]*\))?:/.test(subject)) return "feat";
+	if (/^fix(\([^)]*\))?:/.test(subject)) return "fix";
+	if (/^perf(\([^)]*\))?:/.test(subject)) return "perf";
+	if (/^docs(\([^)]*\))?:/.test(subject)) return "docs";
+	return "chore";
 }
 
-/** Group commits by class, fixed order breaking/feat/fix/other; empty groups omitted. */
+/**
+ * Group commits by class, fixed order breaking/feat/fix/perf/docs/chore;
+ * empty groups omitted. `release:` subjects (the release commits themselves)
+ * are excluded.
+ */
 export function groupCommits(commits: CommitInfo[]): Group[] {
-	const byClass: Record<CommitClass, CommitInfo[]> = { breaking: [], feat: [], fix: [], other: [] };
+	const byClass: Record<CommitClass, CommitInfo[]> = {
+		breaking: [],
+		feat: [],
+		fix: [],
+		perf: [],
+		docs: [],
+		chore: [],
+	};
 	for (const commit of commits) {
+		if (commit.subject.startsWith("release:")) continue;
 		byClass[classifyCommit(commit.subject, commit.body)].push(commit);
 	}
 	return GROUP_ORDER.filter((cls) => byClass[cls].length > 0).map((cls) => ({
@@ -321,75 +314,21 @@ export function notesProblem(notes: string): string | null {
 		: null;
 }
 
-/** GitHub's heading anchor: lowercase, punctuation other than `-`/`_` dropped, spaces to `-`. */
-function headingAnchor(heading: string): string {
-	return heading
-		.toLowerCase()
-		.replace(/[^\p{L}\p{N}\s_-]/gu, "")
-		.replace(/\s/g, "-");
-}
-
-/**
- * GitHub release notes for a curated release. Curated text can outgrow a
- * release body, so the notes link to its CHANGELOG.md section at the tag (and
- * the compare view from the previous tag) instead of repeating it, followed by
- * the commit log.
- */
-export function curatedNotes(
-	version: string,
-	date: string,
-	prevTag: string | null,
-	log: string,
-): string {
-	const tag = `v${version}`;
-	const changelogUrl = `https://github.com/${GITHUB_REPO}/blob/${tag}/CHANGELOG.md#${headingAnchor(`${tag}, ${date}`)}`;
-	const links = [`The full ${tag} release notes are in [CHANGELOG.md](${changelogUrl}).`];
-	if (prevTag !== null) {
-		links.push(
-			`[Compare ${prevTag}...${tag}](https://github.com/${GITHUB_REPO}/compare/${prevTag}...${tag})`,
-		);
-	}
-	const head = links.join(" ");
-	return log.length > 0 ? `${head}\n\n${log}` : `${head}\n`;
-}
-
-/**
- * Every commit hash in `groups` must appear in its own group's bullets
- * (string inclusion is enough). Reports per-group dropped hashes.
- */
-export function validateCoverage(
-	draft: ChangelogDraft,
-	groups: Group[],
-): { ok: boolean; missing: { cls: CommitClass; hashes: string[] }[] } {
-	const missing: { cls: CommitClass; hashes: string[] }[] = [];
-	for (const group of groups) {
-		const draftGroup = draft.groups.find((dg) => dg.cls === group.cls);
-		const joined = (draftGroup?.bullets ?? []).join("\n");
-		const dropped = group.commits.filter((c) => !joined.includes(c.hash)).map((c) => c.hash);
-		if (dropped.length > 0) missing.push({ cls: group.cls, hashes: dropped });
-	}
-	return { ok: missing.length === 0, missing };
-}
-
 /**
  * Exact changelog section format (asserted verbatim in tests):
- * `## v<version>, <date>`, blank, overview paragraph (omitted when null),
- * then per group `### <heading>` + bullets, blank between groups, trailing
- * newline.
+ * `## v<version>, <date>`, then per group a blank line, `### <heading>` and
+ * the bullets, trailing newline. No overview paragraph.
  *
  * Every bullet is normalized to a markdown list item: a stray leading
- * `-`/`*`/`+` marker (e.g. a model that already bulleted its output) is
- * stripped, empty lines are dropped, and the `- ` prefix is applied so each
- * commit renders as its own bullet.
+ * `-`/`*`/`+` marker is stripped, empty lines are dropped, and the `- ` prefix
+ * is applied so each commit renders as its own bullet.
  */
 export function changelogSection(
 	version: string,
 	date: string,
-	overview: string | null,
 	groups: { heading: string; bullets: string[] }[],
 ): string {
 	const parts: string[] = [`## v${version}, ${date}`];
-	if (overview !== null) parts.push("", overview);
 	for (const group of groups) {
 		parts.push("", `### ${group.heading}`, ...bulletLines(group.bullets));
 	}
@@ -411,57 +350,6 @@ export function prependChangelog(existing: string, section: string): string {
 	const trimmed = existing.trim();
 	if (trimmed.length === 0) return section;
 	return `${section.trimEnd()}\n\n${trimmed}\n`;
-}
-
-/**
- * Fold a hand-maintained `## Unreleased` section into the release. The section
- * runs from the first `## Unreleased` heading to the next `## ` heading outside
- * a fenced code block, or to the end. `rest` is the changelog without it, so the
- * heading never survives a release. `log` is the commit log block (`### Commits`,
- * one `#### <heading>` per non-empty group; empty when no group has a bullet).
- * `section` is the curated body under `## v<version>, <date>` followed by `log`,
- * or null when there is no such heading or its body is blank (the caller then
- * generates the section from the commits).
- */
-export function foldUnreleased(
-	existing: string,
-	version: string,
-	date: string,
-	commitLog: { heading: string; bullets: string[] }[],
-): { section: string | null; log: string; rest: string } {
-	const logParts: string[] = [];
-	for (const group of commitLog) {
-		const items = bulletLines(group.bullets);
-		if (items.length > 0) logParts.push("", `#### ${group.heading}`, ...items);
-	}
-	const log = logParts.length > 0 ? ["### Commits", ...logParts].join("\n") + "\n" : "";
-	const lines = existing.split("\n");
-	const start = lines.findIndex((line) => /^## Unreleased\s*$/.test(line));
-	if (start === -1) return { section: null, log, rest: existing };
-	let end = lines.length;
-	let fence: { char: string; length: number } | null = null;
-	for (let i = start + 1; i < lines.length; i++) {
-		const line = lines[i] as string;
-		const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-		if (marker !== undefined) {
-			const char = marker[0] as string;
-			if (fence === null) fence = { char, length: marker.length };
-			else if (char === fence.char && marker.length >= fence.length) fence = null;
-			continue;
-		}
-		if (fence === null && line.startsWith("## ")) {
-			end = i;
-			break;
-		}
-	}
-	const body = lines
-		.slice(start + 1, end)
-		.join("\n")
-		.trim();
-	const rest = [...lines.slice(0, start), ...lines.slice(end)].join("\n");
-	if (body.length === 0) return { section: null, log, rest };
-	const head = `## v${version}, ${date}\n\n${body}\n`;
-	return { section: log.length > 0 ? `${head}\n${log}` : head, log, rest };
 }
 
 /** Tab-indented release manifest (same shape the update channel parses). */
@@ -617,60 +505,6 @@ function todayLocal(): string {
 
 function fail(msg: string): never {
 	throw new Error(msg);
-}
-
-/** Validate an arbitrary LLM result into a ChangelogDraft (null on any shape problem). */
-function normalizeDraft(value: unknown): ChangelogDraft | null {
-	if (value === null || typeof value !== "object") return null;
-	const raw = value as { overview?: unknown; groups?: unknown };
-	if (!Array.isArray(raw.groups)) return null;
-	const groups: ChangelogDraft["groups"] = [];
-	for (const g of raw.groups) {
-		if (g === null || typeof g !== "object") return null;
-		const grp = g as { cls?: unknown; bullets?: unknown };
-		if (typeof grp.cls !== "string" || !Array.isArray(grp.bullets)) return null;
-		if (
-			COMMIT_CLASSES[grp.cls as CommitClass] !== true ||
-			!grp.bullets.every((b) => typeof b === "string")
-		) {
-			return null;
-		}
-		groups.push({ cls: grp.cls as CommitClass, bullets: grp.bullets });
-	}
-	const overview =
-		typeof raw.overview === "string" && raw.overview.length > 0 ? raw.overview : null;
-	return { overview, groups };
-}
-
-/**
- * Build the final section: LLM bullets where coverage holds, deterministic
- * fallback bullets per group otherwise; null draft -> all fallback.
- */
-function buildChangelog(
-	draft: ChangelogDraft | null,
-	groups: Group[],
-	version: string,
-	date: string,
-): string {
-	const finalGroups: { heading: string; bullets: string[] }[] = [];
-	if (draft === null) {
-		for (const g of groups)
-			finalGroups.push({ heading: g.heading, bullets: fallbackBullets(g.commits) });
-	} else {
-		const coverage = validateCoverage(draft, groups);
-		for (const g of groups) {
-			const dropped = coverage.missing.find((m) => m.cls === g.cls);
-			const llmBullets = draft.groups.find((dg) => dg.cls === g.cls)?.bullets;
-			finalGroups.push({
-				heading: g.heading,
-				bullets:
-					dropped === undefined
-						? (llmBullets ?? fallbackBullets(g.commits))
-						: fallbackBullets(g.commits),
-			});
-		}
-	}
-	return changelogSection(version, date, draft?.overview ?? null, finalGroups);
 }
 
 /**
@@ -999,7 +833,7 @@ async function release(argv: string[]): Promise<void> {
 		process.exitCode = 1;
 		return;
 	}
-	const { version: versionArg, dryRun, yes, noLlm, notesFile, stage, go } = parsed.args;
+	const { version: versionArg, dryRun, yes, notesFile, stage, go } = parsed.args;
 	if (go) {
 		await publishStaged({ yes, dryRun });
 		return;
@@ -1030,26 +864,16 @@ async function release(argv: string[]): Promise<void> {
 	const firstRelease = prevTag === null;
 	const range = firstRelease ? "HEAD" : `${prevTag}..HEAD`;
 	const logRaw = (
-		await run(["git", "log", "--format=%H%x1f%s%x1f%b%x1e", range])
+		await run(["git", "log", "--no-merges", "--format=%H%x1f%s%x1f%b%x1e", range])
 	).stdout.toString();
-	const commits = parseGitLog(logRaw);
-	const groups = groupCommits(commits);
-	const countOf = (cls: CommitClass): number =>
-		groups.find((g) => g.cls === cls)?.commits.length ?? 0;
-	const counts = {
-		breaking: countOf("breaking"),
-		feat: countOf("feat"),
-		fix: countOf("fix"),
-		other: countOf("other"),
-	};
+	const groups = groupCommits(parseGitLog(logRaw));
+	const commits = groups.flatMap((g) => g.commits);
+	const countParts = groups.map((g) => `${g.commits.length} ${g.cls}`);
 	console.log(
 		`release: ${commits.length} commits since ${prevTag ?? "the beginning"}${firstRelease ? " (first release)" : ""}`,
 	);
 	for (const c of commits) console.log(`release:   ${c.hash.slice(0, 8)} ${c.subject}`);
-	const countParts: string[] = [];
-	if (counts.breaking > 0) countParts.push(`${counts.breaking} breaking`);
-	countParts.push(`${counts.feat} feat`, `${counts.fix} fix`, `${counts.other} other`);
-	console.log(`release: classification: ${countParts.join(", ")}`);
+	console.log(`release: classification: ${countParts.join(", ") || "none"}`);
 
 	// 3. Version: explicit arg wins; else first release keeps current; else bump
 	// (major clamps to minor while at 0.x; see appliedBump).
@@ -1086,48 +910,20 @@ async function release(argv: string[]): Promise<void> {
 	// runs last: the offline end-to-end walk of pack + pinned install.
 	await runGate(dryRun);
 
-	// 5. Changelog: a curated `## Unreleased` section becomes the release
-	// section as written; otherwise LLM-assisted with a deterministic fallback.
+	// 5. Changelog: commits only, one line per commit, grouped by class.
 	const date = todayLocal();
 	const changelogPath = "CHANGELOG.md";
 	const existingChangelog = existsSync(changelogPath) ? readFileSync(changelogPath, "utf8") : "";
-	const folded = foldUnreleased(
-		existingChangelog,
+	const section = changelogSection(
 		version,
 		date,
 		groups.map((g) => ({ heading: g.heading, bullets: fallbackBullets(g.commits) })),
 	);
-	let section: string;
-	if (folded.section !== null) {
-		console.log("release: changelog: curated ## Unreleased section + commit log");
-		section = folded.section;
-	} else {
-		let draft: ChangelogDraft | null = null;
-		let llmUsed = false;
-		if (!noLlm) {
-			try {
-				const result = await summarizeChangelog({ version, groups }, {});
-				draft = normalizeDraft(result);
-				llmUsed = draft !== null;
-			} catch (err) {
-				console.error(
-					`release: warning: LLM changelog unavailable (${err instanceof Error ? err.message : String(err)}); falling back`,
-				);
-			}
-		}
-		if (noLlm) console.log("release: changelog: deterministic fallback (--no-llm)");
-		else if (llmUsed) console.log("release: changelog: LLM prose");
-		else console.log("release: changelog: deterministic fallback");
-		section = buildChangelog(draft, groups, version, date);
-	}
 
-	// GitHub release body: a curated section links to CHANGELOG.md and carries
-	// the commit log; --notes-file wins over both. Checked before anything is
-	// written or pushed: an oversize body fails `gh release create` only after
-	// the tag is already on origin.
-	const notes =
-		manualNotes ??
-		(folded.section !== null ? curatedNotes(version, date, prevTag, folded.log) : section);
+	// GitHub release body: the changelog section; --notes-file wins. Checked
+	// before anything is written or pushed: an oversize body fails
+	// `gh release create` only after the tag is already on origin.
+	const notes = manualNotes ?? section;
 	const notesTooLong = notesProblem(notes);
 	if (notesTooLong !== null) fail(`${notesTooLong}; shorten them or pass --notes-file`);
 
@@ -1149,9 +945,7 @@ async function release(argv: string[]): Promise<void> {
 		console.log(
 			manualNotes !== null
 				? `release: release notes: manual (${notesFile}, ${manualNotes.length} chars)`
-				: folded.section !== null
-					? `release: release notes: CHANGELOG.md link + commit log (${notes.length} chars)`
-					: `release: release notes: changelog section (${notes.length} chars)`,
+				: `release: release notes: changelog section (${notes.length} chars)`,
 		);
 		console.log("release: changelog:");
 		console.log(section.replace(/^/gm, "  "));
@@ -1189,7 +983,7 @@ async function release(argv: string[]): Promise<void> {
 	pkgObj.version = version;
 	writeFileSync(pkgPath, JSON.stringify(pkgObj, null, "\t") + "\n");
 	console.log(`release: wrote version ${version} to package.json`);
-	writeFileSync(changelogPath, prependChangelog(folded.rest, section));
+	writeFileSync(changelogPath, prependChangelog(existingChangelog, section));
 	console.log(`release: wrote ${changelogPath}`);
 
 	// 9. Build + pack, artifacts into dist-release/.

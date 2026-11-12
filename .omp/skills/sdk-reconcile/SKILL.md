@@ -1,6 +1,6 @@
 ---
 name: sdk-reconcile
-description: Reconcile omp-web with the latest upstream @oh-my-pi SDK release. Bumps the seven pinned @oh-my-pi/* packages together in an isolated git worktree, triages every upstream changelog entry (breaking changes, removals, deprecations, fixes, features) plus a snapshot diff of the SDK surface omp-web mirrors (settings, builtin slash commands, tools), adapts repo code, decides with the user which new capabilities and settings get web surface, runs the release gate plus a real-session smoke, updates docs and changelog, and commits on a local branch. Use for "reconcile SDK", "bump SDK pins", "upgrade @oh-my-pi", or periodic SDK maintenance runs.
+description: Reconcile omp-web with the latest upstream @oh-my-pi SDK release. Bumps the seven pinned @oh-my-pi/* packages together in an isolated git worktree, triages every upstream changelog entry (breaking changes, removals, deprecations, fixes, features) plus a snapshot diff of the SDK surface omp-web mirrors (settings, builtin slash commands, tools), adapts repo code, decides with the user which new capabilities and settings get web surface, runs the release gate plus a real-session smoke, updates docs, and commits on a local branch. Use for "reconcile SDK", "bump SDK pins", "upgrade @oh-my-pi", or periodic SDK maintenance runs.
 ---
 
 # SDK reconcile
@@ -223,10 +223,10 @@ Each slice follows the repo invariants: wire additions with producers, consumers
 
 For items the user chose to track: search first (`kata search "<terms>" --agent`), reuse an open issue if one matches, otherwise `kata create "<title>" --body "<value, size, touchpoints, SDK version, changelog entry>" --idempotency-key sdk-$TARGET-<slug> --json`.
 
-## 9. Docs and changelog
+## 9. Docs
 
 - `AGENTS.md`: the "SDK pins" bullet's version, plus any statement the new SDK made false.
-- `CHANGELOG.md`, `## Unreleased`: under `### Maintenance & other`, if a line `Bump all seven imported \`@oh-my-pi/*\` SDK packages together to ...` already exists, update its version in place; otherwise add one in that wording. Adopted surface and consumer-visible adaptations (a dropped command or setting, a behavior change) get their own entries in the matching existing section; create a section only when none fits.
+- The release changelog is generated from commit subjects, so there is no changelog file to edit. Give each commit a conventional type: `chore(sdk): ...` for the pin bump, and `feat(...)` / `fix(...)` for adopted surface and consumer-visible adaptations (a dropped command or setting, a behavior change).
 - Re-run `bun scripts/preflight.ts --json`. For each `docs-sdk-literals` finding, update literals that describe the current pin. Leave historical ones alone. For example, `docs/src/content/docs/operations/updates.md` and `reference/files.md` cite `18.2.6` as the legacy patch target of releases up to 0.2.0, which is history, not drift.
 - Docs under `docs/src/content/docs/` whose described behavior changed (settings, auth, stats, environment, commands) or that should mention adopted surface.
 
@@ -246,6 +246,6 @@ End every run with this report as rendered Markdown (headings, bullets, tables, 
 - `## Decisions`: each question asked → answer; each headless default taken (`default: <choice> (would have asked: <question>)`); judgment calls made inside a slice.
 - `## Gate`: a table of each command → pass/fail with counts; pre-existing failures named; the profile comparison when transport files changed.
 - `## Smoke`: smoke-session `ok`, `sdkModel`, frames; any live exercise of new surface.
-- `## Docs`: AGENTS.md, CHANGELOG, and docs pages touched.
+- `## Docs`: AGENTS.md and docs pages touched.
 - `## Follow-ups`: tracked kata issues; deferred capabilities with value and size; untested paths; blockers with evidence; process incidents (writes outside the worktree, recovered how).
 - `## Next`: the two commands as inline code, merge (`git -C <invoking checkout> merge <BRANCH>`) or discard (`git worktree remove <WT> && git branch -D <BRANCH>`).

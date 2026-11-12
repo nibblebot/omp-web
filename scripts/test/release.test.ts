@@ -22,8 +22,6 @@ import {
 	nextVersion,
 	parseGitLog,
 	parseReleaseArgs,
-	curatedNotes,
-	foldUnreleased,
 	notesProblem,
 	RELEASE_NOTES_MAX_CHARS,
 	prependChangelog,
@@ -32,26 +30,27 @@ import {
 	runGate,
 	smokePackedTarballPlan,
 	stagedProblems,
-	validateCoverage,
 	validateTarball,
 } from "../release";
-import type { ChangelogDraft, CommitClass, CommitInfo, GateRunner, Group } from "../release";
+import type { CommitClass, CommitInfo, GateRunner, Group } from "../release";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
 
 afterAll(cleanupTempDirs);
 
 const commit = (hash: string, subject: string, body = ""): CommitInfo => ({ hash, subject, body });
 
+const HEADINGS: Record<CommitClass, string> = {
+	breaking: "Breaking changes",
+	feat: "Features",
+	fix: "Fixes",
+	perf: "Performance",
+	docs: "Docs",
+	chore: "Chores",
+};
+
 const mkGroup = (cls: CommitClass, commits: CommitInfo[] = []): Group => ({
 	cls,
-	heading:
-		cls === "breaking"
-			? "Breaking changes"
-			: cls === "feat"
-				? "Features"
-				: cls === "fix"
-					? "Bug fixes"
-					: "Maintenance & other",
+	heading: HEADINGS[cls],
 	commits,
 });
 
@@ -141,30 +140,57 @@ describe("runGate", () => {
 });
 
 describe("classifyCommit", () => {
-	test("feat/fix/other plain", () => {
+	test("plain typed prefixes", () => {
 		expect(classifyCommit("feat: add thing", "")).toBe("feat");
 		expect(classifyCommit("fix: correct thing", "")).toBe("fix");
-		expect(classifyCommit("docs: update readme", "")).toBe("other");
+		expect(classifyCommit("perf: speed thing", "")).toBe("perf");
+		expect(classifyCommit("docs: update readme", "")).toBe("docs");
+		expect(classifyCommit("chore: tidy", "")).toBe("chore");
 	});
 
-	test("feat(scope): is feat", () => {
+	test("scoped prefixes", () => {
 		expect(classifyCommit("feat(ui): add button", "")).toBe("feat");
+		expect(classifyCommit("fix(web): correct", "")).toBe("fix");
+		expect(classifyCommit("perf(web): faster", "")).toBe("perf");
+		expect(classifyCommit("docs(readme): update", "")).toBe("docs");
 	});
 
 	test("type!: is breaking, wins over feat/fix", () => {
 		expect(classifyCommit("fix!: change the API", "")).toBe("breaking");
 		expect(classifyCommit("feat!: break everything", "")).toBe("breaking");
 		expect(classifyCommit("feat(scope)!: break scoped", "")).toBe("breaking");
+		expect(classifyCommit("feat(web)!: break web", "")).toBe("breaking");
+		expect(classifyCommit("fleet+ui!: break compound", "")).toBe("breaking");
 	});
 
-	test("BREAKING CHANGE in body is breaking", () => {
+	test("BREAKING CHANGE in body is breaking and beats feat", () => {
 		expect(classifyCommit("feat: add z", "BREAKING CHANGE: removed x")).toBe("breaking");
 		expect(classifyCommit("feat: add z", "some note\nBREAKING CHANGE: removed x")).toBe("breaking");
 	});
 
-	test("compound prefix and untyped subjects are other", () => {
-		expect(classifyCommit("fleet+ui: sync roster", "")).toBe("other");
-		expect(classifyCommit("untyped subject", "")).toBe("other");
+	test("prose mentioning breaking changes is not a footer", () => {
+		expect(
+			classifyCommit("chore(sdk): upgrade", "- Upstream breaking changes (x) do not reach us."),
+		).toBe("chore");
+		expect(classifyCommit("feat: a", "this has no BREAKING CHANGE: footer inline")).toBe("feat");
+		expect(classifyCommit("fix: b", "BREAKING-CHANGE: dropped y")).toBe("breaking");
+	});
+
+	test("refactor/test/style/build/ci are chores", () => {
+		for (const type of ["refactor", "test", "style", "build", "ci"]) {
+			expect(classifyCommit(`${type}: something`, "")).toBe("chore");
+		}
+	});
+
+	test("compound prefix and untyped subjects are chores", () => {
+		expect(classifyCommit("fleet+ui: sync roster", "")).toBe("chore");
+		expect(classifyCommit("test+fix: cover it", "")).toBe("chore");
+		expect(classifyCommit("untyped subject", "")).toBe("chore");
+	});
+
+	test("a subject merely starting with feat/fix is not a feat/fix", () => {
+		expect(classifyCommit("feature x", "")).toBe("chore");
+		expect(classifyCommit("fixture cleanup", "")).toBe("chore");
 	});
 });
 
@@ -179,10 +205,12 @@ describe("computeBump", () => {
 		expect(computeBump([mkGroup("feat")])).toBe("minor");
 	});
 
-	test("only fix/other -> patch", () => {
+	test("only fix/perf/docs/chore -> patch", () => {
 		expect(computeBump([mkGroup("fix")])).toBe("patch");
-		expect(computeBump([mkGroup("other")])).toBe("patch");
-		expect(computeBump([mkGroup("fix"), mkGroup("other")])).toBe("patch");
+		expect(computeBump([mkGroup("perf")])).toBe("patch");
+		expect(computeBump([mkGroup("docs")])).toBe("patch");
+		expect(computeBump([mkGroup("chore")])).toBe("patch");
+		expect(computeBump([mkGroup("fix"), mkGroup("chore")])).toBe("patch");
 	});
 });
 
@@ -276,19 +304,25 @@ describe("groupCommits", () => {
 			commit("3", "docs: c"),
 			commit("4", "feat!: d"),
 			commit("5", "chore: e"),
+			commit("6", "perf: f"),
+			commit("7", "fleet+ui: g"),
 		]);
-		expect(groups.map((g) => g.cls)).toEqual(["breaking", "feat", "fix", "other"]);
+		expect(groups.map((g) => g.cls)).toEqual(["breaking", "feat", "fix", "perf", "docs", "chore"]);
 		expect(groups.map((g) => g.heading)).toEqual([
 			"Breaking changes",
 			"Features",
-			"Bug fixes",
-			"Maintenance & other",
+			"Fixes",
+			"Performance",
+			"Docs",
+			"Chores",
 		]);
 		expect(groups.map((g) => g.commits.map((c) => c.hash))).toEqual([
 			["4"],
 			["2"],
 			["1"],
-			["3", "5"],
+			["6"],
+			["3"],
+			["5", "7"],
 		]);
 	});
 
@@ -296,32 +330,52 @@ describe("groupCommits", () => {
 		const onlyFix = groupCommits([commit("1", "fix: a")]);
 		expect(onlyFix.map((g) => g.cls)).toEqual(["fix"]);
 	});
+
+	test("only feat and docs commits yield exactly Features then Docs", () => {
+		const groups = groupCommits([commit("1", "docs: a"), commit("2", "feat: b")]);
+		expect(groups.map((g) => g.heading)).toEqual(["Features", "Docs"]);
+	});
+
+	test("release: commits are excluded", () => {
+		const groups = groupCommits([commit("1", "release: v0.3.0"), commit("2", "fix: a")]);
+		expect(groups.map((g) => g.commits.map((c) => c.hash))).toEqual([["2"]]);
+		expect(groupCommits([commit("1", "release: v0.3.0")])).toEqual([]);
+	});
+
+	test("each commit lands in exactly one group", () => {
+		const commits = [
+			commit("1", "feat: a", "BREAKING CHANGE: x"),
+			commit("2", "feature x"),
+			commit("3", "test+fix: y"),
+			commit("4", "feat(web)!: z"),
+			commit("5", "docs(readme): w"),
+		];
+		const hashes = groupCommits(commits).flatMap((g) => g.commits.map((c) => c.hash));
+		expect(hashes.toSorted()).toEqual(["1", "2", "3", "4", "5"]);
+	});
 });
 
 describe("changelogSection", () => {
 	const url = (hash: string) => `https://github.com/nibblebot/omp-web/commit/${hash}`;
 
-	test("exact format without overview", () => {
+	test("exact format: heading, blank line per group, trailing newline, no overview", () => {
 		const groups = [
 			{ heading: "Features", bullets: [`- add x ([abc1234](${url("abc1234")}))`] },
-			{ heading: "Bug fixes", bullets: [`- fix y ([def5678](${url("def5678")}))`] },
+			{ heading: "Fixes", bullets: [`- fix y ([def5678](${url("def5678")}))`] },
 		];
-		expect(changelogSection("0.2.0", "2026-08-19", null, groups)).toBe(
+		expect(changelogSection("0.2.0", "2026-08-19", groups)).toBe(
 			"## v0.2.0, 2026-08-19\n" +
 				"\n" +
 				"### Features\n" +
 				`- add x ([abc1234](${url("abc1234")}))\n` +
 				"\n" +
-				"### Bug fixes\n" +
+				"### Fixes\n" +
 				`- fix y ([def5678](${url("def5678")}))\n`,
 		);
 	});
 
-	test("exact format with overview", () => {
-		const groups = [{ heading: "Features", bullets: ["- b"] }];
-		expect(changelogSection("0.2.0", "2026-08-19", "A release.", groups)).toBe(
-			"## v0.2.0, 2026-08-19\n\nA release.\n\n### Features\n- b\n",
-		);
+	test("no groups yields the heading line only", () => {
+		expect(changelogSection("0.2.0", "2026-08-19", [])).toBe("## v0.2.0, 2026-08-19\n");
 	});
 
 	test("every bullet renders as one markdown list item", () => {
@@ -333,7 +387,7 @@ describe("changelogSection", () => {
 				bullets: ["already bulleted", "* star bullet", "- plus a marker", "", "  "],
 			},
 		];
-		expect(changelogSection("0.2.0", "2026-08-19", null, groups)).toBe(
+		expect(changelogSection("0.2.0", "2026-08-19", groups)).toBe(
 			"## v0.2.0, 2026-08-19\n" +
 				"\n" +
 				"### Features\n" +
@@ -344,50 +398,11 @@ describe("changelogSection", () => {
 	});
 });
 
-describe("fallbackBullets + validateCoverage", () => {
+describe("fallbackBullets", () => {
 	test("fallbackBullets show and link an 8-character hash", () => {
 		expect(fallbackBullets([commit("abc1234def5678", "feat: add x")])).toEqual([
 			"- feat: add x ([abc1234d](https://github.com/nibblebot/omp-web/commit/abc1234d))",
 		]);
-	});
-
-	test("coverage ok when every hash appears in its group", () => {
-		const groups: Group[] = [
-			mkGroup("feat", [commit("a1b2c3d4", "feat: x"), commit("e5f6a7b8", "feat: y")]),
-		];
-		const draft: ChangelogDraft = {
-			overview: null,
-			groups: [
-				{
-					cls: "feat",
-					bullets: [
-						"- x ([a1b2c3d4](https://github.com/nibblebot/omp-web/commit/a1b2c3d4))",
-						"- y ([e5f6a7b8](https://github.com/nibblebot/omp-web/commit/e5f6a7b8))",
-					],
-				},
-			],
-		};
-		const coverage = validateCoverage(draft, groups);
-		expect(coverage.ok).toBe(true);
-		expect(coverage.missing).toEqual([]);
-	});
-
-	test("dropped hash is reported per group", () => {
-		const groups: Group[] = [
-			mkGroup("feat", [commit("a1b2c3d4", "feat: x"), commit("e5f6a7b8", "feat: y")]),
-		];
-		const draft: ChangelogDraft = {
-			overview: null,
-			groups: [
-				{
-					cls: "feat",
-					bullets: ["- x ([a1b2c3d4](https://github.com/nibblebot/omp-web/commit/a1b2c3d4))"],
-				},
-			],
-		};
-		const coverage = validateCoverage(draft, groups);
-		expect(coverage.ok).toBe(false);
-		expect(coverage.missing).toEqual([{ cls: "feat", hashes: ["e5f6a7b8"] }]);
 	});
 });
 
@@ -403,86 +418,6 @@ describe("prependChangelog", () => {
 	test("empty existing returns the section unchanged", () => {
 		const section = "## v0.2.0, 2026-08-19\n\n### Features\n- b1\n";
 		expect(prependChangelog("", section)).toBe(section);
-	});
-});
-
-describe("foldUnreleased", () => {
-	const older = "## v0.2.1, 2026-09-25\n\nOld notes.\n";
-
-	test("without an Unreleased heading the changelog is untouched and the section is generated", () => {
-		expect(foldUnreleased(older, "0.3.0", "2026-10-30", [])).toEqual({
-			section: null,
-			log: "",
-			rest: older,
-		});
-	});
-
-	test("a curated Unreleased body becomes the release section, followed by the commit log", () => {
-		const existing = `## Unreleased\n\nIntro.\n\n### Breaking changes\n- one\n\n${older}`;
-		const log = [
-			{ heading: "Breaking changes", bullets: ["refactor!: drop x ([abc](u/abc))"] },
-			{ heading: "Features", bullets: [] },
-			{ heading: "Bug fixes", bullets: ["- fix: y ([def](u/def))", "  "] },
-		];
-		const { section, log: block, rest } = foldUnreleased(existing, "0.3.0", "2026-10-30", log);
-		const expectedLog =
-			"### Commits\n\n" +
-			"#### Breaking changes\n- refactor!: drop x ([abc](u/abc))\n\n#### Bug fixes\n- fix: y ([def](u/def))\n";
-		const expected = `## v0.3.0, 2026-10-30\n\nIntro.\n\n### Breaking changes\n- one\n\n${expectedLog}`;
-		expect(section).toBe(expected);
-		expect(block).toBe(expectedLog);
-		expect(prependChangelog(rest, section as string)).toBe(`${expected}\n${older}`);
-	});
-
-	test("a blank Unreleased body falls back to the generated section and drops the heading", () => {
-		const log = [{ heading: "Features", bullets: ["feat: z"] }];
-		const { section, rest } = foldUnreleased(
-			`## Unreleased\n\n\n${older}`,
-			"0.3.0",
-			"2026-10-30",
-			log,
-		);
-		expect(section).toBeNull();
-		expect(rest).not.toContain("Unreleased");
-		expect(rest).toContain(older);
-	});
-
-	test("a ## line inside a fenced code block does not end the section", () => {
-		const body = "Config:\n\n```md\n## not a heading\n```\n\nAfter the fence.";
-		const { section, rest } = foldUnreleased(
-			`## Unreleased\n\n${body}\n\n${older}`,
-			"0.3.0",
-			"d",
-			[],
-		);
-		expect(section).toBe(`## v0.3.0, d\n\n${body}\n`);
-		expect(rest.trim()).toBe(older.trim());
-	});
-
-	test("an Unreleased section with no earlier release runs to the end; no commits, no log heading", () => {
-		expect(foldUnreleased("## Unreleased\n\n- first\n", "0.1.0", "d", [])).toEqual({
-			section: "## v0.1.0, d\n\n- first\n",
-			log: "",
-			rest: "",
-		});
-	});
-});
-
-describe("curatedNotes", () => {
-	test("link the version's CHANGELOG.md section at the tag and the compare view, then the commit log", () => {
-		expect(curatedNotes("0.3.0", "2026-10-30", "v0.2.1", "### Commits\n\n- a\n")).toBe(
-			"The full v0.3.0 release notes are in " +
-				"[CHANGELOG.md](https://github.com/nibblebot/omp-web/blob/v0.3.0/CHANGELOG.md#v030-2026-10-30). " +
-				"[Compare v0.2.1...v0.3.0](https://github.com/nibblebot/omp-web/compare/v0.2.1...v0.3.0)" +
-				"\n\n### Commits\n\n- a\n",
-		);
-	});
-
-	test("a first release has no compare link, and no commits leave only the link line", () => {
-		expect(curatedNotes("0.1.0", "d", null, "")).toBe(
-			"The full v0.1.0 release notes are in " +
-				"[CHANGELOG.md](https://github.com/nibblebot/omp-web/blob/v0.1.0/CHANGELOG.md#v010-d).\n",
-		);
 	});
 });
 
@@ -583,18 +518,17 @@ describe("parseReleaseArgs", () => {
 		const r = parseReleaseArgs([]);
 		expect(r.ok).toBe(true);
 		if (r.ok) {
-			expect(r.args).toEqual({ dryRun: false, yes: false, noLlm: false, stage: false, go: false });
+			expect(r.args).toEqual({ dryRun: false, yes: false, stage: false, go: false });
 		}
 	});
 
 	test("positional version + all flags", () => {
-		const r = parseReleaseArgs(["0.1.0", "--dry-run", "--yes", "--no-llm"]);
+		const r = parseReleaseArgs(["0.1.0", "--dry-run", "--yes"]);
 		expect(r.ok).toBe(true);
 		if (r.ok) {
 			expect(r.args.version).toBe("0.1.0");
 			expect(r.args.dryRun).toBe(true);
 			expect(r.args.yes).toBe(true);
-			expect(r.args.noLlm).toBe(true);
 		}
 	});
 
@@ -653,7 +587,6 @@ describe("parseReleaseArgs", () => {
 	test("--go rejects a version and generation flags", () => {
 		for (const argv of [
 			["--go", "0.2.0"],
-			["--go", "--no-llm"],
 			["--go", "--notes-file", "notes.md"],
 		]) {
 			const r = parseReleaseArgs(argv);

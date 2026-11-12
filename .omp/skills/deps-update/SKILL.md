@@ -1,6 +1,6 @@
 ---
 name: deps-update
-description: Update every non-SDK dependency of omp-web (all direct dependencies and devDependencies except the @oh-my-pi/* pins) to its latest version in an isolated git worktree, take in-range updates as one batch and out-of-range (major) updates one group at a time, adapt repo code to breaking changes, verify the full build (types, lint, format, web build, installable bundle, docs site, tests, onboarding E2E, bundle and UI smokes), update the changelog, and commit on a local branch. Use for "update dependencies", "bump deps", "upgrade non-SDK packages", or periodic dependency maintenance runs.
+description: Update every non-SDK dependency of omp-web (all direct dependencies and devDependencies except the @oh-my-pi/* pins) to its latest version in an isolated git worktree, take in-range updates as one batch and out-of-range (major) updates one group at a time, adapt repo code to breaking changes, verify the full build (types, lint, format, web build, installable bundle, docs site, tests, onboarding E2E, bundle and UI smokes), update docs, and commit on a local branch. Use for "update dependencies", "bump deps", "upgrade non-SDK packages", or periodic dependency maintenance runs.
 ---
 
 # Non-SDK dependency update
@@ -141,9 +141,9 @@ Fix failures caused by a bump, following the AGENTS.md editing workflows.
 - Never suppress a type error, lint error, or failing test to get green.
 - Re-run the full gate after the last fix, not just the files you touched.
 
-## 8. Docs and changelog
+## 8. Docs
 
-- `CHANGELOG.md`, `## Unreleased`, `### Maintenance & other`: if a line starting `Update non-SDK dependencies` already exists there, rewrite it in place. Otherwise add one: `Update non-SDK dependencies: <name> <new>, ...; deferred: <name> <latest> (<reason>).` (omit the deferred clause when nothing was deferred). Add separate entries only for consumer-visible changes the adaptation caused.
+- The release changelog is generated from commit subjects, so there is no changelog file to edit. Give each commit a conventional type: `chore(deps): ...` for the updates, and `feat(...)` / `fix(...)` for consumer-visible changes the adaptation caused.
 - Grep `AGENTS.md`, `README.md`, `docs/*.md`, and `docs/src/content/docs/` for version literals and tool behavior of the packages that moved (for example tool names, config keys, minimum versions). Update statements the new versions made false; leave historical ones alone.
 - Commit these as `docs: record dependency updates`.
 
@@ -161,7 +161,7 @@ Excluded:     <sdkExcluded count> @oh-my-pi/* (sdk-reconcile), skipped specs: <l
 Changes:      <files/areas adapted and why; lint rule changes>
 Gate:         <each step-6 command → pass/fail; pre-existing failures named>
 Smoke:        <bundle --version output; UI smoke result or stated limit>
-Docs:         <CHANGELOG / docs pages touched>
+Docs:         <docs pages touched>
 Follow-ups:   <new capabilities worth adopting; deprecations; blockers>
 Next:         git -C <invoking checkout> merge <BRANCH>   |   git worktree remove <WT> && git branch -D <BRANCH>
 ```
