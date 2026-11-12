@@ -1,7 +1,12 @@
 import { createMemo, createSignal, For, Match, Show, Switch, type Component } from "solid-js";
 import type { BrowserUiBlock } from "#lib/wire/browser-ui-contract";
+import { featurePreferences } from "../../features/preferences";
 import { state } from "../../state";
-import { answerBrowserUiRequest, type BrowserUiRequest } from "../../store/browser-ui";
+import {
+	answerBrowserUiRequest,
+	isStatusBarHidden,
+	type BrowserUiRequest,
+} from "../../store/browser-ui";
 import { Markdown } from "../ui/Markdown";
 import { Modal } from "../ui/Modal";
 
@@ -84,9 +89,6 @@ const ExtensionContribution: Component<{ request: BrowserUiRequest }> = (props) 
 					</div>
 				)}
 			</Show>
-			<button type="button" disabled={props.request.busy} onClick={() => answer()}>
-				Dismiss
-			</button>
 		</>
 	);
 };
@@ -98,6 +100,10 @@ export const ExtensionUi: Component<{
 	const requests = createMemo(() =>
 		state.browserUi.requests.filter((request) => {
 			const contribution = request.contribution;
+			// With the Plugins feature off nothing could show a hidden status again: draw them all.
+			// The stored choice, not the active set: that is empty until the feature chunks
+			// load, and a hidden bar must not flash on every page load.
+			if (featurePreferences().plugins && isStatusBarHidden(contribution)) return false;
 			const placement =
 				contribution.payload.placement ??
 				(contribution.kind === "widget" || contribution.kind === "panel" ? "belowEditor" : "modal");

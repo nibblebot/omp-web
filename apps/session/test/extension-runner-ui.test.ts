@@ -13,7 +13,13 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import { initSdkTuiGlobals } from "../sdk-tui-globals";
 import { cleanupTempDirs, tempDir } from "#lib/testkit/temp-dir.testkit";
-import { browserUiPrimeFrames } from "../browser-ui";
+import { sep } from "node:path";
+import {
+	browserUiPrimeFrames,
+	buildBrowserUiParams,
+	setPluginBrowserUiEnabled,
+} from "../browser-ui";
+import { setKnownPlugins } from "../plugin-attribution";
 import { setOnFrameTap, streams, type ClientConsumer } from "../client-delivery";
 import { createCollabSession } from "../collab-session";
 import type { SessionEntry } from "../session-entry";
@@ -367,5 +373,71 @@ describe("extension status, working message and widgets kept for later clients",
 		const frames = primeClient();
 		expect(frames).toHaveLength(3);
 		expect(frames).not.toContainEqual(shown("status:gone", "Briefly"));
+	});
+});
+
+describe("bars traced to the installed plugin that set them", () => {
+	/** Run `act` with this test file's directory standing in for an installed plugin's code. */
+	function asPlugin(enabled: boolean, act: () => void): void {
+		setKnownPlugins([{ name: "omp-probe", enabled, roots: [import.meta.dir + sep] }]);
+		try {
+			act();
+		} finally {
+			setKnownPlugins([]);
+		}
+	}
+	const owners = () =>
+		primeClient().flatMap((frame) => {
+			if (frame.type !== "ui_request") return [];
+			const contribution = buildBrowserUiParams(frame.params);
+			return [[contribution.id, contribution.owner]];
+		});
+
+	test("a bar set from plugin code is owned by that plugin, and its clear removes it", () => {
+		const ui = entry.session.extensionRunner!.getUIContext();
+		asPlugin(true, () => ui.setStatus("traced", "from a plugin"));
+		expect(owners()).toContainEqual(["status:traced", "plugin:omp-probe"]);
+
+		// Cleared from a call the stack does not trace to the plugin: still the same bar.
+		ui.setStatus("traced", undefined);
+		expect(owners().map(([id]) => id)).not.toContain("status:traced");
+	});
+
+	test("disabling a plugin takes its bars down and keeps the others; enabling shows its latest", () => {
+		const ui = entry.session.extensionRunner!.getUIContext();
+		asPlugin(true, () => ui.setWidget("traced", ["plugin line"]));
+		const before = owners().length;
+
+		setPluginBrowserUiEnabled(entry, "omp-probe", false);
+		expect(owners().map(([id]) => id)).not.toContain("widget:traced");
+		expect(owners()).toHaveLength(before - 1);
+
+		// Its code is still loaded and keeps updating; nothing shows while it is disabled.
+		asPlugin(false, () => ui.setWidget("traced", ["still running"]));
+		expect(owners().map(([id]) => id)).not.toContain("widget:traced");
+
+		setPluginBrowserUiEnabled(entry, "omp-probe", true);
+		expect(primeClient()).toContainEqual(shown("widget:traced", "still running"));
+		expect(owners()).toHaveLength(before);
+
+		ui.setWidget("traced", undefined);
+		expect(owners()).toHaveLength(before - 1);
+	});
+
+	test("a disabled plugin's update leaves another extension's bar of the same id alone", () => {
+		const ui = entry.session.extensionRunner!.getUIContext();
+		ui.setStatus("shared", "the extension's");
+
+		asPlugin(false, () => ui.setStatus("shared", "the plugin's"));
+		asPlugin(false, () => ui.setStatus("shared", "the plugin's, again"));
+		expect(primeClient()).toContainEqual(shown("status:shared", "the extension's"));
+		expect(owners().filter(([id]) => id === "status:shared")).toEqual([
+			["status:shared", "terminal-hooks"],
+		]);
+
+		asPlugin(false, () => ui.setStatus("shared", undefined));
+		expect(primeClient()).toContainEqual(shown("status:shared", "the extension's"));
+		ui.setStatus("shared", undefined);
+		expect(owners().map(([id]) => id)).not.toContain("status:shared");
 	});
 });

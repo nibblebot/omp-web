@@ -1103,3 +1103,19 @@ export const belowEditorRequest: BrowserUiRequest = {
 	busy: false,
 	error: null,
 };
+
+/** What `ctx.ui.setStatus("git-branch", …)` becomes: a status bar under the composer. */
+export const statusBarRequest: BrowserUiRequest = {
+	requestId: "bui_4",
+	contribution: {
+		id: "status:git-branch",
+		kind: "panel",
+		owner: "terminal-hooks",
+		title: "Status: git-branch",
+		payload: { blocks: [{ type: "text", text: "feat/login-fix · 2 ahead" }] },
+		version: 1,
+	},
+	scope: undefined,
+	busy: false,
+	error: null,
+};

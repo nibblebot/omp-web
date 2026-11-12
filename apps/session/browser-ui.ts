@@ -28,9 +28,14 @@ import type { SessionEntry } from "./session-entry";
 import { broadcastTo, streams, type ClientConsumer } from "./client-delivery";
 import type { ServerFrame } from "#lib/wire/protocol";
 import { hasBrowserUiClient, webUiRequest } from "./ui-context";
+import { callerPlugin } from "./plugin-attribution";
 import {
 	BROWSER_UI_METHOD,
+	BROWSER_UI_PLUGIN_OWNER_PREFIX,
+	BROWSER_UI_STATUS_PREFIX,
 	BROWSER_UI_VERSION,
+	BROWSER_UI_WIDGET_PREFIX,
+	BROWSER_UI_WORKING_ID,
 	buildBrowserUiParams,
 	type BrowserUiBlock,
 	type BrowserUiCapability,
@@ -148,6 +153,63 @@ export function disposeBrowserUi(
 	entry.pendingUiRequests.delete(record.requestId);
 	pending.reject(new BrowserUiReplacedError(reason));
 	broadcastTo(entry.handle, { type: "ui_request_end", id: record.requestId });
+}
+
+/**
+ * The bars of plugins disabled in this session, per entry, by (owner, id): taken down, and
+ * kept current while the plugin's still-loaded code updates them, so enabling the plugin again
+ * shows them without waiting for its next update.
+ */
+const heldByEntry = new WeakMap<SessionEntry, Map<string, BrowserUiContribution>>();
+
+function hold(entry: SessionEntry, contribution: BrowserUiContribution): void {
+	let held = heldByEntry.get(entry);
+	if (!held) {
+		held = new Map();
+		heldByEntry.set(entry, held);
+	}
+	const key = contributionKey(contribution.owner, contribution.id);
+	held.delete(key);
+	held.set(key, contribution);
+	// Bounded like the kept set: a disabled plugin cannot grow it without limit.
+	for (const oldest of held.keys()) {
+		if (held.size <= MAX_RETAINED_BROWSER_UI) break;
+		held.delete(oldest);
+	}
+	disposeBrowserUi(entry, contribution.owner, contribution.id, "plugin disabled");
+}
+
+/** Keep `contribution` as its (owner, id)'s current one and show it to any attached browser. */
+function keepAndShow(entry: SessionEntry, contribution: BrowserUiContribution): void {
+	retain(entry, contribution);
+	if (!hasBrowserUiClient(entry)) return;
+	void showContribution(entry, contribution, (onRegistered) =>
+		webUiRequest(entry, BROWSER_UI_METHOD, contribution, onRegistered),
+	).catch((err: unknown) => logEnded(contribution.kind, contribution.id, err));
+}
+
+/**
+ * Follow a plugin switched in this session: disabling takes down every bar traced to it,
+ * enabling shows them again. Its code stays loaded either way until the next boot.
+ */
+export function setPluginBrowserUiEnabled(
+	entry: SessionEntry,
+	name: string,
+	enabled: boolean,
+): void {
+	const owner = `${BROWSER_UI_PLUGIN_OWNER_PREFIX}${name}`;
+	if (!enabled) {
+		for (const kept of retainedByEntry.get(entry)?.values() ?? []) {
+			if (kept.owner === owner) hold(entry, kept);
+		}
+		return;
+	}
+	const held = heldByEntry.get(entry);
+	for (const [key, contribution] of held ?? []) {
+		if (contribution.owner !== owner) continue;
+		held?.delete(key);
+		keepAndShow(entry, contribution);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +331,30 @@ export function wrapTerminalHooks(
 	>,
 	owner: string = TERMINAL_HOOKS_OWNER,
 ): ExtensionUIContext {
+	/** Clear the bar `id` set by the calling extension. */
+	const clear = (id: string): void => {
+		const plugin = callerPlugin();
+		const retained = retainedByEntry.get(entry);
+		const held = heldByEntry.get(entry);
+		const exact = contributionKey(
+			plugin ? `${BROWSER_UI_PLUGIN_OWNER_PREFIX}${plugin.name}` : owner,
+			id,
+		);
+		if (held?.delete(exact)) return;
+		const kept = retained?.get(exact);
+		if (kept) {
+			disposeBrowserUi(entry, kept.owner, id);
+			return;
+		}
+		// Set from a call the stack traced differently (a timer, a shared helper): clear the
+		// bar of that id whoever was named its owner, so it never outlives its extension's clear.
+		for (const [key, other] of held ?? []) {
+			if (other.id === id) held?.delete(key);
+		}
+		for (const other of retained?.values() ?? []) {
+			if (other.id === id) disposeBrowserUi(entry, other.owner, id);
+		}
+	};
 	const send = (
 		id: string,
 		kind: BrowserUiCapability,
@@ -276,20 +362,20 @@ export function wrapTerminalHooks(
 		blocks: BrowserUiBlock[],
 		placement?: BrowserUiPayload["placement"],
 	): void => {
+		const plugin = callerPlugin();
 		try {
 			const contribution = buildBrowserUiParams({
 				id,
 				kind,
-				owner,
+				owner: plugin ? `${BROWSER_UI_PLUGIN_OWNER_PREFIX}${plugin.name}` : owner,
 				title,
 				payload: placement === undefined ? { blocks } : { blocks, placement },
 				version: BROWSER_UI_VERSION,
 			});
-			retain(entry, contribution);
-			if (!hasBrowserUiClient(entry)) return;
-			void showContribution(entry, contribution, (onRegistered) =>
-				webUiRequest(entry, BROWSER_UI_METHOD, contribution, onRegistered),
-			).catch((err: unknown) => logEnded(kind, id, err));
+			// A plugin disabled in this session keeps running until the next boot; its bars do
+			// not show. Only its own copy is held: another extension may use the same id.
+			if (plugin?.enabled === false) hold(entry, contribution);
+			else keepAndShow(entry, contribution);
 		} catch (err) {
 			logEnded(kind, id, err);
 		}
@@ -312,24 +398,26 @@ export function wrapTerminalHooks(
 		refreshTranscript: () => {},
 		getLinkClicksAvailable: () => false,
 		setStatus: (key, text) => {
+			const id = `${BROWSER_UI_STATUS_PREFIX}${key}`;
 			if (text === undefined) {
-				disposeBrowserUi(entry, owner, `status:${key}`);
+				clear(id);
 				return;
 			}
-			send(`status:${key}`, "panel", `Status: ${key}`, [
-				{ type: "text", text: Bun.stripANSI(text) },
-			]);
+			send(id, "panel", `Status: ${key}`, [{ type: "text", text: Bun.stripANSI(text) }]);
 		},
 		setWorkingMessage: (message) => {
 			if (message === undefined) {
-				disposeBrowserUi(entry, owner, "working");
+				clear(BROWSER_UI_WORKING_ID);
 				return;
 			}
-			send("working", "panel", "Working", [{ type: "text", text: Bun.stripANSI(message) }]);
+			send(BROWSER_UI_WORKING_ID, "panel", "Working", [
+				{ type: "text", text: Bun.stripANSI(message) },
+			]);
 		},
 		setWidget: (key, content, options) => {
+			const id = `${BROWSER_UI_WIDGET_PREFIX}${key}`;
 			if (content === undefined) {
-				disposeBrowserUi(entry, owner, `widget:${key}`);
+				clear(id);
 				return;
 			}
 			// A component factory draws in a terminal only (the SDK's built-in autoresearch
@@ -340,7 +428,7 @@ export function wrapTerminalHooks(
 				type: "text",
 				text: Bun.stripANSI(String(line)),
 			}));
-			send(`widget:${key}`, "widget", `Widget: ${key}`, blocks, options?.placement);
+			send(id, "widget", `Widget: ${key}`, blocks, options?.placement);
 		},
 		setFooter: () => {},
 		setHeader: () => {},

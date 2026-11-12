@@ -101,6 +101,8 @@ import { createLifecycleMethods, type LifecycleMirror } from "./lifecycle-adapte
 import { createComposerMethods } from "./composer-methods";
 import { createSettingsMethods } from "./settings-methods";
 import { buildUiContext, cancelEntryUiRequests, rejectEntryUiRequests } from "./ui-context";
+import { setPluginBrowserUiEnabled } from "./browser-ui";
+import { refreshKnownPlugins } from "./plugin-attribution";
 import { createAnnotationMethods } from "./review-annotations";
 import { createGitReviewMethods } from "./review-git";
 import { createPlanReviewMethods, exitPlanMode } from "./review-plan";
@@ -1113,7 +1115,13 @@ export function createWebMethods(deps: WebMethodsDeps): WebMethods {
 		vibeRehydrate: async (entry) => rehydrateVibeWorkers(entry),
 		listPlugins: async (_entry, a) => plugins.listPlugins(a),
 		getPluginConfig: async (_entry, a) => plugins.getPluginConfig(a),
-		setPluginEnabled: async (_entry, a) => plugins.setPluginEnabled(a),
+		setPluginEnabled: async (entry, a) => {
+			const detail = await plugins.setPluginEnabled(a);
+			// The plugin's code stays loaded until the next boot; its bars follow the switch now.
+			await refreshKnownPlugins(deps.cwd);
+			setPluginBrowserUiEnabled(entry, detail.name, detail.enabled);
+			return detail;
+		},
 		setPluginFeatures: async (_entry, a) => plugins.setPluginFeatures(a),
 		setPluginSetting: async (_entry, a) => plugins.setPluginSetting(a),
 	};

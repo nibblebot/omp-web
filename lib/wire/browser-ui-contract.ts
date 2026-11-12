@@ -6,6 +6,21 @@ export const BROWSER_UI_METHOD = "browser_ui";
 export const BROWSER_UI_VERSION = 1;
 
 /**
+ * Ids of the contributions an extension's `ctx.ui.setStatus(key, text)`,
+ * `ctx.ui.setWidget(key, lines)` and `ctx.ui.setWorkingMessage(text)` become: a prefix plus
+ * `key` for the first two. The browser tells these bars by their id to let a user hide one.
+ */
+export const BROWSER_UI_STATUS_PREFIX = "status:";
+export const BROWSER_UI_WIDGET_PREFIX = "widget:";
+export const BROWSER_UI_WORKING_ID = "working";
+
+/**
+ * Owner of a bar the session traced to an installed plugin: the prefix plus the plugin's name.
+ * A bar from any other extension keeps the host's own owner.
+ */
+export const BROWSER_UI_PLUGIN_OWNER_PREFIX = "plugin:";
+
+/**
  * Upper bound on the serialized contribution JSON, in bytes. Oversize
  * contributions are rejected outright, never silently truncated.
  */

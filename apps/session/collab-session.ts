@@ -63,6 +63,7 @@ import { cancelEntryUiRequests } from "./ui-context";
 import { handleSubagentLifecycle, handleSubagentProgress } from "./subagent-mirror";
 import { wireJobWidgets } from "./job-widgets";
 import { buildUiContext } from "./ui-context";
+import { refreshKnownPlugins } from "./plugin-attribution";
 import { watchSkills } from "./skill-methods";
 import { ensureWorkerReviver } from "./worker-lifecycle";
 
@@ -421,6 +422,8 @@ export function createCollabSession(deps: CollabSessionDeps): CollabSession {
 				broadcastTo(target.handle, { type: "skills_changed", state }),
 		});
 		installPlanReviewHandler(entry);
+		// Before the first handler runs: a bar set at session_start is traced to its plugin.
+		await refreshKnownPlugins(sessionCwd);
 		await initializeExtensionRunner(entry, uiContext);
 		// Boot has no client yet and a broadcast is never replayed to a fresh stream, so hold
 		// the SDK's model diagnostic until the first priming (takeStartupNoticeFrames).
