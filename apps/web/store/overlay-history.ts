@@ -142,6 +142,11 @@ export function afterHistorySettles(fn: () => void): void {
 	else waiters.push(fn);
 }
 
+/** Whether a dialog, popover, menu or drawer is taking keyboard input. */
+export function hasOpenOverlayLayer(): boolean {
+	return layers.length > 0;
+}
+
 /**
  * Register an open layer. `close` is called when Back pops the layer (it must
  * close the UI). Returns a `dismiss` for the UI close path; it is idempotent

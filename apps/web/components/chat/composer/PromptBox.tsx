@@ -1,4 +1,4 @@
-import { createSignal, type Component } from "solid-js";
+import { createSignal, onCleanup, onMount, type Component } from "solid-js";
 import { dispatchInput, parseInput, type InputMode } from "../../../prompt/commands";
 import { caretOnFirstRow } from "../../../prompt/caret-row";
 import { isImeKey, resolveEnterAction } from "../../../prompt/key-input";
@@ -8,6 +8,7 @@ import { composeTextAttachments, type TextAttachment } from "../../../prompt/att
 import {
 	connectionState,
 	dequeueLastQueued,
+	hasLiveSession,
 	isReady,
 	isSessionChanging,
 	isSwitching,
@@ -18,6 +19,7 @@ import {
 import { cancelScheduledDraftSave, currentDraftKey, removeDraft } from "../../../store/drafts";
 import { reportError } from "../../../store/toasts";
 import { openDock } from "../../../store/dock";
+import { hasOpenOverlayLayer } from "../../../store/overlay-history";
 import { AskBar } from "../../requests/AskBar";
 import { ExtensionUi } from "../../requests/ExtensionUi";
 import { PromptActions } from "./PromptActions";
@@ -27,6 +29,9 @@ import { useGhostText } from "./useGhostText";
 import { enterSends } from "../../../prompt/enter-key";
 
 const history = new PromptHistory();
+
+const KEYBOARD_CONTROLS =
+	"input, textarea, select, button, a[href], summary, [tabindex], [role=textbox], [role=combobox]";
 
 /**
  * P2 prompt box (G03). Submit expands `^model` chips, pushes submitted text
@@ -45,6 +50,38 @@ export const PromptBox: Component = () => {
 	const ghost = useGhostText(() => textarea, message, setMessage);
 	// Double-Esc on an empty textarea opens the branch picker (TUI parity).
 	let lastEsc = 0;
+
+	onMount(() => {
+		const onUncaughtTyping = (e: KeyboardEvent) => {
+			if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || isImeKey(e)) return;
+			// Leave Space available for scrolling and control activation when focus is outside the editor.
+			if (!/^\S$/u.test(e.key)) return;
+			const target = e.composedPath()[0];
+			if (
+				!(target instanceof HTMLElement) ||
+				target.isContentEditable ||
+				target.closest(KEYBOARD_CONTROLS)
+			)
+				return;
+			if (
+				!textarea?.isConnected ||
+				textarea.disabled ||
+				!hasLiveSession() ||
+				state.modal !== null ||
+				state.uiRequest !== null ||
+				hasOpenOverlayLayer() ||
+				(state.drawerViewport && state.dock !== null)
+			)
+				return;
+
+			e.preventDefault();
+			textarea.focus({ preventScroll: true });
+			// Insert at the saved caret as a native edit so input handlers and Undo still work.
+			document.execCommand("insertText", false, e.key);
+		};
+		window.addEventListener("keydown", onUncaughtTyping);
+		onCleanup(() => window.removeEventListener("keydown", onUncaughtTyping));
+	});
 
 	const submit = (mode: InputMode) => {
 		// A switch in flight: the old session is still attached underneath, so a
